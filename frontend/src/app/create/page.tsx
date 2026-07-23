@@ -92,8 +92,8 @@ export default function CreatePage() {
   const rateLimited = rateLimitRemainingMinutes > 0;
   const usernameFieldError =
     fieldErrors.username ??
-    (form.username && !/^[a-zA-Z0-9\-]+$/.test(form.username)
-      ? "Username can only contain alphanumeric characters and hyphens."
+    (form.username && !/^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?$/.test(form.username)
+      ? "Username can only contain alphanumeric characters and hyphens, and must start and end with an alphanumeric character."
       : null);
 
   function set(field: keyof FormData) {
@@ -137,8 +137,8 @@ export default function CreatePage() {
         setError("Display name and username are required.");
         return;
       }
-      if (!/^[a-zA-Z0-9\-]+$/.test(form.username)) {
-        setError("Username can only contain alphanumeric characters and hyphens.");
+      if (!/^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?$/.test(form.username)) {
+        setError("Username can only contain alphanumeric characters and hyphens, and must start and end with an alphanumeric character.");
         return;
       }
     }

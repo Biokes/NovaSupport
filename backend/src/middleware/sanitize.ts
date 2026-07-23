@@ -64,12 +64,12 @@ const LOWERCASE_FIELDS = new Set([
 
 // Maximum lengths for different field types
 const MAX_LENGTHS = {
-  bio: 500,
+  bio: 280,
   message: 280,
   description: 1000,
-  displayName: 100,
+  displayName: 64,
   title: 200,
-  username: 50,
+  username: 32,
   twitterHandle: 15,
   githubHandle: 39,
   url: 2048,
