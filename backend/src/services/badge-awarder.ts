@@ -19,11 +19,11 @@ function profileLockKey(profileId: string): bigint {
   return h;
 }
 
-export async function checkAndAwardBadges(profileId: string): Promise<void> {
+export async function checkAndAwardBadges(profileId: string, prismaClient = prisma): Promise<void> {
   const lockKey = profileLockKey(profileId);
 
   try {
-    await prisma.$transaction(async (tx) => {
+    await prismaClient.$transaction(async (tx) => {
       // Serialize concurrent badge checks for the same profile using a
       // transaction-scoped advisory lock. Concurrent callers block until the
       // current check commits, then each runs with the latest DB state rather
