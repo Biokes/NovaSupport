@@ -8,6 +8,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { API_BASE_URL } from "@/lib/config";
 import { apiFetch } from "@/lib/api-client";
 import { stellarExpertUrl } from "@/lib/stellar";
+import { getWalletAdapter, type WalletId } from "@/lib/wallet-adapters";
 import {
   AreaChart,
   Area,
@@ -433,21 +434,27 @@ export default function DashboardPage() {
     };
   }, [campaignId, selectedPeriod]);
 
+  // #811: Use the wallet-adapter path so Albedo and Lobstr users also get
+  // their address resolved and isOwner evaluated correctly.
   useEffect(() => {
-    async function getFreighterAddress() {
+    async function resolveConnectedWallet() {
       try {
-        const { getAddress } = await import("@stellar/freighter-api");
-        const result = await getAddress();
-        if (result.error) {
+        const walletId =
+          typeof window !== "undefined"
+            ? (localStorage.getItem("walletId") as WalletId | null)
+            : null;
+        const adapter = walletId ? getWalletAdapter(walletId) : undefined;
+        if (!adapter) {
           setConnectedWallet("");
-        } else {
-          setConnectedWallet(result.address);
+          return;
         }
+        const address = await adapter.connect().catch(() => "");
+        setConnectedWallet(address);
       } catch {
         setConnectedWallet("");
       }
     }
-    getFreighterAddress();
+    resolveConnectedWallet();
   }, []);
 
   // Fetch two consecutive 30-day periods and compute period-over-period trends (#517)
@@ -777,9 +784,16 @@ export default function DashboardPage() {
 
           {/* Summary Cards */}
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {/* #820: use dominant asset code instead of hardcoding XLM */}
             <StatCard
               title="Total Raised"
-              value={`${data.summary.totalRaised.toLocaleString()} XLM`}
+              value={`${data.summary.totalRaised.toLocaleString()} ${
+                assetBreakdown.length > 0
+                  ? assetBreakdown.reduce((a, b) =>
+                      a.value >= b.value ? a : b
+                    ).name
+                  : "XLM"
+              }`}
               icon={<Wallet className="text-mint" />}
               trend={trends.totalRaised}
               positive={trends.totalRaisedPositive}
@@ -793,7 +807,13 @@ export default function DashboardPage() {
             />
             <StatCard
               title="Avg. Support"
-              value={`${data.summary.avgContribution} XLM`}
+              value={`${data.summary.avgContribution} ${
+                assetBreakdown.length > 0
+                  ? assetBreakdown.reduce((a, b) =>
+                      a.value >= b.value ? a : b
+                    ).name
+                  : "XLM"
+              }`}
               icon={<TrendingUp className="text-gold" />}
               trend="—"
               positive={true}

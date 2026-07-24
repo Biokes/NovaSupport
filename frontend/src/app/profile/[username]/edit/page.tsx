@@ -142,8 +142,14 @@ export default function EditProfilePage() {
     const code = newAssetCode.trim().toUpperCase();
     if (!code) { setAssetError("Asset code is required."); return; }
     if (!/^[A-Z0-9]{1,12}$/.test(code)) { setAssetError("Invalid asset code."); return; }
-    if (assets.some((a) => a.code === code)) { setAssetError("Asset already added."); return; }
-    setAssets((prev) => [...prev, { code, issuer: newAssetIssuer.trim() }]);
+    // #812: compare both code AND issuer so creators can accept multiple
+    // issuers of the same asset code (e.g. Circle USDC vs another USDC).
+    const issuerToAdd = newAssetIssuer.trim();
+    if (assets.some((a) => a.code === code && (a.issuer ?? "") === issuerToAdd)) {
+      setAssetError("This exact asset (code + issuer) is already added.");
+      return;
+    }
+    setAssets((prev) => [...prev, { code, issuer: issuerToAdd }]);
     setNewAssetCode("");
     setNewAssetIssuer("");
     setAssetError(null);
@@ -172,28 +178,30 @@ export default function EditProfilePage() {
         email: form.email || null,
       };
 
-      const [profileRes, assetsRes] = await Promise.all([
-        apiFetch(`${API_BASE_URL}/profiles/${username}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(profilePayload),
-        }),
-        apiFetch(`${API_BASE_URL}/profiles/${username}/assets`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            assets: assets.map((a) => ({
-              code: a.code,
-              issuer: a.issuer || null,
-            })),
-          }),
-        }),
-      ]);
+      // #813: Send requests sequentially so a failure in the profile PATCH
+      // prevents the assets PATCH from firing — avoids partial/inconsistent state.
+      const profileRes = await apiFetch(`${API_BASE_URL}/profiles/${username}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(profilePayload),
+      });
 
       if (!profileRes.ok) {
         const json = await profileRes.json().catch(() => ({})) as Record<string, unknown>;
         throw new Error(typeof json.error === "string" ? json.error : "Failed to save profile.");
       }
+
+      const assetsRes = await apiFetch(`${API_BASE_URL}/profiles/${username}/assets`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assets: assets.map((a) => ({
+            code: a.code,
+            issuer: a.issuer || null,
+          })),
+        }),
+      });
+
       if (!assetsRes.ok) {
         const json = await assetsRes.json().catch(() => ({})) as Record<string, unknown>;
         throw new Error(typeof json.error === "string" ? json.error : "Failed to save assets.");
