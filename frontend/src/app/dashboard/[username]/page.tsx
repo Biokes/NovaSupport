@@ -321,7 +321,7 @@ type RecurringDrip = {
 };
 
 export default function DashboardPage() {
-  const { campaignId } = useParams<{ campaignId: string }>();
+  const { username } = useParams<{ username: string }>();
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [settings, setSettings] = useState<ProfileSettings | null>(null);
   const [chartData, setChartData] = useState<ChartPoint[]>([]);
@@ -359,9 +359,9 @@ export default function DashboardPage() {
     async function fetchData() {
       try {
         const [analyticsRes, profileRes, assetsRes] = await Promise.all([
-          apiFetch(`${API_BASE_URL}/analytics/${campaignId}`),
-          apiFetch(`${API_BASE_URL}/profiles/${campaignId}`),
-          apiFetch(`${API_BASE_URL}/profiles/${campaignId}/analytics/assets`),
+          apiFetch(`${API_BASE_URL}/analytics/${username}`),
+          apiFetch(`${API_BASE_URL}/profiles/${username}`),
+          apiFetch(`${API_BASE_URL}/profiles/${username}/analytics/assets`),
         ]);
         if (!analyticsRes.ok) throw new Error("Failed to fetch analytics");
         if (!profileRes.ok) throw new Error("Failed to fetch profile settings");
@@ -393,7 +393,7 @@ export default function DashboardPage() {
       }
     }
     fetchData();
-  }, [campaignId]);
+  }, [username]);
 
   useEffect(() => {
     let cancelled = false;
@@ -404,7 +404,7 @@ export default function DashboardPage() {
       try {
         const from = getFromDate(selectedPeriod);
         const response = await apiFetch(
-          `${API_BASE_URL}/profiles/${campaignId}/analytics/timeseries?period=daily&from=${encodeURIComponent(from)}`,
+          `${API_BASE_URL}/profiles/${username}/analytics/timeseries?period=daily&from=${encodeURIComponent(from)}`,
         );
 
         if (!response.ok) {
@@ -431,7 +431,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [campaignId, selectedPeriod]);
+  }, [username, selectedPeriod]);
 
   // #811: Use the wallet-adapter path so Albedo and Lobstr users also get
   // their address resolved and isOwner evaluated correctly.
@@ -471,10 +471,10 @@ export default function DashboardPage() {
 
         const [currRes, prevRes] = await Promise.all([
           apiFetch(
-            `${API_BASE_URL}/profiles/${campaignId}/analytics/timeseries?period=daily&from=${encodeURIComponent(periodStart)}&to=${encodeURIComponent(periodEnd)}`,
+            `${API_BASE_URL}/profiles/${username}/analytics/timeseries?period=daily&from=${encodeURIComponent(periodStart)}&to=${encodeURIComponent(periodEnd)}`,
           ),
           apiFetch(
-            `${API_BASE_URL}/profiles/${campaignId}/analytics/timeseries?period=daily&from=${encodeURIComponent(prevStart)}&to=${encodeURIComponent(periodStart)}`,
+            `${API_BASE_URL}/profiles/${username}/analytics/timeseries?period=daily&from=${encodeURIComponent(prevStart)}&to=${encodeURIComponent(periodStart)}`,
           ),
         ]);
 
@@ -530,7 +530,7 @@ export default function DashboardPage() {
       }
     }
     fetchTrends();
-  }, [campaignId]);
+  }, [username]);
 
   const isOwner = Boolean(
     settings?.walletAddress &&
@@ -547,7 +547,7 @@ export default function DashboardPage() {
       setDripsLoading(true);
       try {
         const endpoint = isOwner
-          ? `${API_BASE_URL}/recurring-support?profileId=${campaignId}`
+          ? `${API_BASE_URL}/recurring-support?profileId=${username}`
           : `${API_BASE_URL}/recurring-support`;
 
         const res = await apiFetch(endpoint);
@@ -572,7 +572,7 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [campaignId, isOwner]);
+  }, [username, isOwner]);
 
   async function handleDripAction(id: string, action: "paused" | "cancelled") {
     setDripActionLoading(id);
@@ -603,7 +603,7 @@ export default function DashboardPage() {
     setCsvLoading(true);
     try {
       const res = await apiFetch(
-        `${API_BASE_URL}/profiles/${campaignId}/transactions/csv`,
+        `${API_BASE_URL}/profiles/${username}/transactions/csv`,
       );
       if (!res.ok) throw new Error("Failed to fetch transaction CSV");
       const csv = await res.text();
@@ -611,7 +611,7 @@ export default function DashboardPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `novasupport-transactions-${campaignId}.csv`;
+      a.download = `novasupport-transactions-${username}.csv`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -629,7 +629,7 @@ export default function DashboardPage() {
     setSettingsSaving(true);
     setSettings({ ...settings, notifyOnSupport: next });
     try {
-      const res = await apiFetch(`${API_BASE_URL}/profiles/${campaignId}`, {
+      const res = await apiFetch(`${API_BASE_URL}/profiles/${username}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notifyOnSupport: next }),
@@ -651,7 +651,7 @@ export default function DashboardPage() {
     setVerificationBannerMsg(null);
     try {
       const res = await apiFetch(
-        `${API_BASE_URL}/profiles/${campaignId}/resend-verification-email`,
+        `${API_BASE_URL}/profiles/${username}/resend-verification-email`,
         {
           method: "POST",
         },
@@ -709,7 +709,7 @@ export default function DashboardPage() {
       <AppShell>
         <div className="mx-auto max-w-7xl space-y-8">
           <Link
-            href={`/profile/${campaignId}`}
+            href={`/profile/${username}`}
             className="text-sm text-indigo-500 hover:underline"
           >
             ← Back to profile
@@ -721,7 +721,7 @@ export default function DashboardPage() {
             </h1>
             <p className="text-steel">
               Real-time performance metrics for{" "}
-              <span className="text-white font-mono">{campaignId}</span>
+              <span className="text-white font-mono">{username}</span>
             </p>
           </header>
 

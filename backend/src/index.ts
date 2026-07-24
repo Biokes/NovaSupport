@@ -1,3 +1,5 @@
+// tracing.ts must be the very first import so OTel patches all subsequent modules
+import "./tracing.js";
 import "dotenv/config";
 import * as Sentry from "@sentry/node";
 import { logger } from "./logger.js";
