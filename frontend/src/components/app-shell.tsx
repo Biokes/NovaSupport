@@ -129,6 +129,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Link href="/create" className="hover:text-white transition">
                   Create draft
                 </Link>
+                <Link href="/recurring" className="hover:text-white transition">
+                  Recurring support
+                </Link>
+                <Link href="/settings" className="hover:text-white transition">
+                  Settings
+                </Link>
               </nav>
               <ThemeToggle />
             </div>
