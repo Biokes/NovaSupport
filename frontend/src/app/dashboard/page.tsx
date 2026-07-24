@@ -562,6 +562,7 @@ export default function DashboardPage() {
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleEditMilestone(milestone)}
+                          aria-label={`Edit milestone: ${milestone.title}`}
                           className="min-h-[44px] min-w-[44px] rounded-lg bg-white/5 p-2 text-steel hover:bg-white/10 transition-colors"
                           title="Edit"
                         >
@@ -569,6 +570,7 @@ export default function DashboardPage() {
                         </button>
                         <button
                           onClick={() => setDeleteConfirm(milestone.id)}
+                          aria-label={`Delete milestone: ${milestone.title}`}
                           className="min-h-[44px] min-w-[44px] rounded-lg bg-white/5 p-2 text-red-400 hover:bg-red-500/10 transition-colors"
                           title="Delete"
                         >
@@ -752,6 +754,7 @@ export default function DashboardPage() {
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleToggleDeliveries(webhook.id)}
+                          aria-label={expandedDeliveries === webhook.id ? "Hide webhook deliveries" : "View webhook deliveries"}
                           className="rounded-lg bg-white/5 p-2 text-steel hover:bg-white/10 transition-colors"
                           title="View deliveries"
                         >
@@ -759,6 +762,7 @@ export default function DashboardPage() {
                         </button>
                         <button
                           onClick={() => setWebhookDeleteConfirm(webhook.id)}
+                          aria-label={`Delete webhook for ${webhook.url}`}
                           className="rounded-lg bg-white/5 p-2 text-red-400 hover:bg-red-500/10 transition-colors"
                           title="Delete"
                         >
