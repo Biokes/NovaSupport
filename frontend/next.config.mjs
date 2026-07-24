@@ -18,7 +18,17 @@ const nextConfig = {
         source: "/((?!embed).*)",
         headers: [
           { key: "X-Frame-Options", value: "DENY" },
-          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          {
+            key: "Content-Security-Policy",
+            value: [
+              "default-src 'self'",
+              "script-src 'self' 'unsafe-inline'", // 'unsafe-inline' needed for Next.js inline chunks
+              "style-src 'self' 'unsafe-inline'",
+              `connect-src 'self' ${process.env.NEXT_PUBLIC_API_BASE_URL ?? ""} ${process.env.NEXT_PUBLIC_HORIZON_URL ?? ""} ${process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ?? ""}`,
+              "img-src 'self' data: blob: https:",
+              "frame-ancestors 'none'",
+            ].join("; "),
+          },
         ],
       },
       {
