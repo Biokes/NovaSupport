@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getAddress } from "@stellar/freighter-api";
 import { AppShell } from "@/components/app-shell";
+import { getWalletAdapter, type WalletId } from "@/lib/wallet-adapters";
 import { API_BASE_URL } from "@/lib/config";
 import { apiFetch } from "@/lib/api-client";
 import { useToast } from "@/lib/use-toast";
@@ -93,8 +93,9 @@ export default function EditProfilePage() {
         }
         const profile: ProfileData = await res.json();
 
-        const result = await getAddress().catch(() => ({ address: "", error: "Freighter not available" }));
-        const connectedAddress = "address" in result ? result.address : "";
+        const walletId = localStorage.getItem("walletId") as WalletId | null;
+        const adapter = walletId ? getWalletAdapter(walletId) : null;
+        const connectedAddress = adapter ? await adapter.connect().catch(() => "") : "";
 
         if (!connectedAddress) {
           // Wallet not connected or Freighter is locked — show a prompt instead of silently redirecting
@@ -224,9 +225,9 @@ export default function EditProfilePage() {
         <div className="flex h-[60vh] flex-col items-center justify-center gap-4 text-center px-4">
           <div className="rounded-full bg-yellow-500/10 p-4 text-3xl">🔒</div>
           <h2 className="text-xl font-bold text-white">Connect your wallet to edit this profile</h2>
-          <p className="text-sm text-steel max-w-sm">
-            Freighter is not connected or is locked. Unlock your Freighter wallet and try again.
-          </p>
+            <p className="text-sm text-steel max-w-sm">
+              Your wallet is not connected or is locked. Unlock your wallet and try again.
+            </p>
           <button
             type="button"
             onClick={() => {
