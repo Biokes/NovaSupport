@@ -28,6 +28,9 @@ type Profile = {
   bio: string;
   walletAddress: string;
   avatarUrl?: string | null;
+  websiteUrl?: string | null;
+  twitterHandle?: string | null;
+  githubHandle?: string | null;
   acceptedAssets: Array<{ code: string; issuer?: string | null }>;
   emailVerified?: boolean;
 };
@@ -222,8 +225,37 @@ export default async function ProfilePage({ params }: PageProps) {
       )
     : null;
 
+  const sameAs = [
+    profile.websiteUrl,
+    profile.twitterHandle
+      ? `https://twitter.com/${profile.twitterHandle.replace(/^@/, "")}`
+      : null,
+    profile.githubHandle
+      ? `https://github.com/${profile.githubHandle.replace(/^@/, "")}`
+      : null,
+  ].filter(Boolean) as string[];
+
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "ProfilePage",
+    "mainEntity": {
+      "@type": "Person",
+      "name": profile.displayName,
+      "alternateName": profile.username,
+      "description": profile.bio || undefined,
+      "image": profile.avatarUrl || undefined,
+      "url": `${SITE_URL}/profile/${profile.username}`,
+      "identifier": profile.walletAddress,
+      ...(sameAs.length > 0 ? { sameAs } : {}),
+    },
+  };
+
   return (
     <AppShell>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8 items-start animate-fade-in">
         <div className="space-y-12">
           <div className="space-y-3">
