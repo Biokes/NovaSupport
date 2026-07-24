@@ -179,6 +179,7 @@ model RecurringSupport {
   profileId        String
   amount           Decimal                     @db.Decimal(18, 7)
   assetCode        String                      @default("XLM")
+  assetIssuer      String?
   frequency        String
   nextRunAt        DateTime                    @default(now())
   status           String                      @default("active")

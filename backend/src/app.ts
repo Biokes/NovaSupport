@@ -3171,6 +3171,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         if (
           new Decimal(execution.recurringSupport.amount).toString() !== new Decimal(parsed.data.amount).toString() ||
           execution.recurringSupport.assetCode !== parsed.data.assetCode ||
+          (execution.recurringSupport.assetIssuer ?? null) !== (parsed.data.assetIssuer ?? null) ||
           execution.recurringSupport.profile.walletAddress !== parsed.data.recipientAddress
         ) {
           return sendError(res, 400, "Transaction details do not match recurring support subscription");
@@ -4087,10 +4088,11 @@ All errors return JSON with an \`error\` field and optional \`code\`:
   // ── Recurring Support ───────────────────────────────────────────────────
 
   const recurringSchema = z.object({
-    profileId:  z.string().min(1),
-    amount:     z.string().regex(/^\d+(\.\d{1,7})?$/, "amount must be a positive decimal with up to 7 decimal places").refine(v => parseFloat(v) > 0, "amount must be greater than zero"),
-    assetCode:  z.string().min(1).max(12).optional().default("XLM"),
-    frequency:  z.enum(["weekly", "monthly"]),
+    profileId:   z.string().min(1),
+    amount:      z.string().regex(/^\d+(\.\d{1,7})?$/, "amount must be a positive decimal with up to 7 decimal places").refine(v => parseFloat(v) > 0, "amount must be greater than zero"),
+    assetCode:   z.string().min(1).max(12).optional().default("XLM"),
+    assetIssuer: z.string().optional().nullable(),
+    frequency:   z.enum(["weekly", "monthly"]),
   });
 
   v1Router.post("/recurring-support", requireAuth, writeLimiter, async (req, res) => {
@@ -4098,7 +4100,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     if (!parsed.success) {
       return sendError(res, 400, parsed.error.issues.map(i => i.message).join("; "));
     }
-    const { profileId, amount, assetCode, frequency } = parsed.data;
+    const { profileId, amount, assetCode, assetIssuer, frequency } = parsed.data;
 
     const profile = await prisma.profile.findUnique({
       where: { id: profileId },
@@ -4128,6 +4130,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         profileId,
         amount,
         assetCode,
+        assetIssuer: assetIssuer ?? null,
         frequency,
         nextRunAt,
       },
@@ -4159,6 +4162,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         supporterAddress: s.supporter?.email ?? null,
         amount: s.amount.toString(),
         assetCode: s.assetCode,
+        assetIssuer: s.assetIssuer,
         frequency: s.frequency,
         nextRunAt: s.nextRunAt,
         status: s.status,
@@ -4182,6 +4186,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       profileAvatarUrl: s.profile.avatarUrl,
       amount: s.amount.toString(),
       assetCode: s.assetCode,
+      assetIssuer: s.assetIssuer,
       frequency: s.frequency,
       nextRunAt: s.nextRunAt,
       status: s.status,
@@ -4193,8 +4198,9 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     status: z.enum(["active", "paused", "cancelled"]).optional(),
     frequency: z.enum(["weekly", "monthly"]).optional(),
     amount: z.string().regex(/^\d+(\.\d{1,7})?$/).refine(v => parseFloat(v) > 0).optional(),
-  }).refine((data) => data.status || data.frequency || data.amount, {
-    message: "At least one of status, frequency, or amount is required",
+    assetIssuer: z.string().optional().nullable(),
+  }).refine((data) => data.status || data.frequency || data.amount || data.assetIssuer !== undefined, {
+    message: "At least one field to update is required",
   });
 
   v1Router.patch("/recurring-support/:id", requireAuth, writeLimiter, async (req, res) => {
@@ -4212,7 +4218,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     if (!subscription) return sendError(res, 404, "Recurring support not found");
     if (subscription.supporterId !== user.id) return sendError(res, 403, "Forbidden");
 
-    const { status, frequency, amount } = parsed.data;
+    const { status, frequency, amount, assetIssuer } = parsed.data;
 
     // Recalculate nextRunAt when frequency changes
     let nextRunAt: Date | undefined;
@@ -4231,6 +4237,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         ...(status ? { status } : {}),
         ...(frequency ? { frequency } : {}),
         ...(amount ? { amount } : {}),
+        ...(assetIssuer !== undefined ? { assetIssuer } : {}),
         ...(nextRunAt ? { nextRunAt } : {}),
       },
     });

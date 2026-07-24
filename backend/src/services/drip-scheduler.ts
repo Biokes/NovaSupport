@@ -18,8 +18,7 @@ function addMonths(date: Date, months: number): Date {
   return result;
 }
 
-export async function processDueRecurringSupports(prismaClient = prisma) {
-  const now = new Date();
+export async function processDueRecurringSupports(prismaClient = prisma, now = new Date()) {
   let cursor: string | undefined;
 
   do {
@@ -80,6 +79,8 @@ export async function processDueRecurringSupports(prismaClient = prisma) {
         dripId: support.id,
         profileId: support.profileId,
         amount: support.amount.toString(),
+        assetCode: support.assetCode,
+        assetIssuer: support.assetIssuer,
       }, "Processed due recurring support");
       Metrics.dripsProcessed();
 
