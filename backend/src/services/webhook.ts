@@ -79,8 +79,6 @@ export async function deliverWebhook(
       willRetry:
         response.status >= 500 ||
         response.status === 429 ||
-        response.status === 401 ||
-        response.status === 403 ||
         response.status === 408,
     };
   } catch (error: unknown) {

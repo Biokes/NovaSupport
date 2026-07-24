@@ -3729,7 +3729,10 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 
   v1Router.post("/profiles/:username/badges", requireAuth, async (req, res) => {
     // Admin-only: only the configured admin wallet may assign badges
-    if (!req.auth || !ADMIN_WALLET || req.auth.walletAddress !== ADMIN_WALLET) {
+    if (!ADMIN_WALLET) {
+      return sendError(res, 503, "Admin endpoint not configured");
+    }
+    if (!req.auth || req.auth.walletAddress !== ADMIN_WALLET) {
       return sendError(res, 403, "Forbidden: Admin access required");
     }
 
@@ -3781,7 +3784,10 @@ All errors return JSON with an \`error\` field and optional \`code\`:
    *         description: Internal server error
    */
   v1Router.post("/admin/webhooks/requeue", requireAuth, async (req, res) => {
-    if (!req.auth || !ADMIN_WALLET || req.auth.walletAddress !== ADMIN_WALLET) {
+    if (!ADMIN_WALLET) {
+      return sendError(res, 503, "Admin endpoint not configured");
+    }
+    if (!req.auth || req.auth.walletAddress !== ADMIN_WALLET) {
       return sendError(res, 403, "Forbidden: Admin access required");
     }
 
@@ -4492,7 +4498,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
             AND "status" != 'failed'
             AND "createdAt" >= ${from}
             AND "createdAt" <= ${to}
-            ${assetCode ? (Prisma as any).sql`AND "assetCode" = ${assetCode}` : (Prisma as any).empty}
+            ${assetCode ? Prisma.sql`AND "assetCode" = ${assetCode}` : Prisma.empty}
           GROUP BY DATE_TRUNC('month', "createdAt")
           ORDER BY date ASC
         `;
@@ -4507,7 +4513,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
             AND "status" != 'failed'
             AND "createdAt" >= ${from}
             AND "createdAt" <= ${to}
-            ${assetCode ? (Prisma as any).sql`AND "assetCode" = ${assetCode}` : (Prisma as any).empty}
+            ${assetCode ? Prisma.sql`AND "assetCode" = ${assetCode}` : Prisma.empty}
           GROUP BY DATE_TRUNC('week', "createdAt")
           ORDER BY date ASC
         `;
@@ -4522,7 +4528,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
             AND "status" != 'failed'
             AND "createdAt" >= ${from}
             AND "createdAt" <= ${to}
-            ${assetCode ? (Prisma as any).sql`AND "assetCode" = ${assetCode}` : (Prisma as any).empty}
+            ${assetCode ? Prisma.sql`AND "assetCode" = ${assetCode}` : Prisma.empty}
           GROUP BY DATE_TRUNC('day', "createdAt")
           ORDER BY date ASC
         `;
