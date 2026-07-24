@@ -159,6 +159,7 @@ export function createSorobanRpcClient(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(15_000),
       });
 
       if (!response.ok) {
@@ -191,6 +192,7 @@ async function getLatestLedger(rpcUrl: string): Promise<number> {
       id: randomUUID(),
       method: "getLatestLedger",
     }),
+    signal: AbortSignal.timeout(15_000),
   });
 
   if (!response.ok) {
