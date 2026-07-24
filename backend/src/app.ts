@@ -677,7 +677,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     res.status(criticalServicesHealthy ? 200 : 503).json({
       ok: criticalServicesHealthy,
       service: "NovaSupport backend",
-      network: "Stellar Testnet",
+      network: process.env.STELLAR_NETWORK === "PUBLIC" ? "Stellar Mainnet" : "Stellar Testnet",
       timestamp: new Date().toISOString(),
       checks,
     });
@@ -2691,7 +2691,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       // Fetch transactions with optional date filtering
       const transactions = await prisma.supportTransaction.findMany({
         where: {
-          recipientAddress: profile.walletAddress,
+          profileId: profile.id,
           ...(dateStart || dateEnd
             ? {
                 createdAt: {
@@ -3443,12 +3443,12 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 
   /**
    * @openapi
-   * /analytics/{campaignId}:
+   * /analytics/{username}:
    *   get:
    *     summary: Get profile analytics
    *     parameters:
    *       - in: path
-   *         name: campaignId
+   *         name: username
    *         required: true
    *         schema:
    *           type: string
@@ -3491,19 +3491,19 @@ All errors return JSON with an \`error\` field and optional \`code\`:
    *       404:
    *         description: Analytics not found
    */
-  v1Router.get("/analytics/:campaignId", async (req, res) => {
+  v1Router.get("/analytics/:username", async (req, res) => {
     const pagination = paginationSchema.safeParse(req.query);
     if (!pagination.success) {
       return sendError(res, 400, "Invalid pagination parameters", "INVALID_PAGINATION");
     }
-    const { campaignId } = req.params;
+    const { username } = req.params;
     const format = getQueryString(req.query.format);
     const startDate = getQueryString(req.query.startDate) ?? getQueryString(req.query.from);
     const endDate = getQueryString(req.query.endDate) ?? getQueryString(req.query.to);
 
-    // Attempt to find a profile by username (campaignId maps to username)
+    // Attempt to find a profile by username
     const profile = await prisma.profile.findUnique({
-      where: { username: campaignId },
+      where: { username },
       include: { acceptedAssets: true },
     });
 
@@ -3537,12 +3537,12 @@ All errors return JSON with an \`error\` field and optional \`code\`:
           orderBy: { createdAt: "desc" },
           take: MAX_EXPORT_ROWS,
         });
-        const filenameSafeCampaignId = campaignId.replace(/[^a-zA-Z0-9_-]/g, "-");
+        const filenameSafeUsername = username.replace(/[^a-zA-Z0-9_-]/g, "-");
 
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="analytics-${filenameSafeCampaignId}-${new Date().toISOString().split("T")[0]}.csv"`,
+          `attachment; filename="analytics-${filenameSafeUsername}-${new Date().toISOString().split("T")[0]}.csv"`,
         );
         return res.send(createAnalyticsCsv(transactions));
       }
