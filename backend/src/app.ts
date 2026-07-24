@@ -3998,9 +3998,88 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     }
   });
 
-  // ── Supporters ─────────────────────────────────────────────────────────
+  // ── Profile Reports (#771) ─────────────────────────────────────────────
 
-  v1Router.get("/supporters/:address", async (req, res) => {
+  // Rate limiter: 1 report per IP per profile per hour
+  const reportLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 1,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => process.env.NODE_ENV === "test",
+    keyGenerator: (req) => `${req.ip}-${req.params.username}`,
+    message: {
+      error: "You have already reported this profile. Please wait an hour before submitting another report.",
+      code: "REPORT_RATE_LIMIT_EXCEEDED",
+    },
+  });
+
+  const reportSchema = z.object({
+    reason: z.enum(["spam", "impersonation", "inappropriate", "scam"]),
+    details: z.string().max(500).optional(),
+  });
+
+  v1Router.post("/profiles/:username/report", reportLimiter, async (req, res) => {
+    try {
+      const { username } = req.params as { username: string };
+      const profile = await prisma.profile.findUnique({
+        where: { username },
+        select: { id: true, username: true },
+      });
+
+      if (!profile) {
+        return sendError(res, 404, "Profile not found");
+      }
+
+      const parsed = reportSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return sendError(res, 400, "Invalid request body: reason must be one of spam, impersonation, inappropriate, scam");
+      }
+
+      const reporterIp = req.ip ?? "unknown";
+
+      await (prisma as any).profileReport.create({
+        data: {
+          profileId: profile.id,
+          reason: parsed.data.reason,
+          details: parsed.data.details ?? null,
+          reporterIp,
+        },
+      });
+
+      // Check if this profile has accumulated 3+ reports and alert admin
+      const reportCount = await (prisma as any).profileReport.count({
+        where: { profileId: profile.id },
+      });
+
+      const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
+      if (reportCount >= 3 && ADMIN_EMAIL) {
+        try {
+          const { sendEmail } = await import("./mailer.js");
+          await sendEmail({
+            to: ADMIN_EMAIL,
+            subject: `[NovaSupport] Profile @${username} has ${reportCount} report(s)`,
+            html: `
+              <p>Profile <strong>@${username}</strong> has accumulated <strong>${reportCount}</strong> report(s).</p>
+              <p>Latest report reason: <strong>${parsed.data.reason}</strong></p>
+              ${parsed.data.details ? `<p>Details: ${parsed.data.details}</p>` : ""}
+              <p>Please review this profile in the admin panel.</p>
+            `,
+          });
+        } catch (emailErr) {
+          // Don't fail the request if email fails — just log it
+          logger.warn({ err: emailErr, username }, "failed to send admin alert email for profile report");
+        }
+      }
+
+      return res.status(201).json({ message: "Report submitted successfully." });
+    } catch (e: unknown) {
+      logger.error({ err: e }, "failed to submit profile report");
+      return sendError(res, 500, "Internal server error");
+    }
+  });
+
+  // ── Supporters ─────────────────────────────────────────────────────────
     try {
       const { address } = req.params;
 

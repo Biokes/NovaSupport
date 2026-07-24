@@ -45,6 +45,7 @@ model Profile {
   milestones                Milestone[]
   webhooks                  Webhook[]
   notificationPreferences   NotificationPreferences?
+  reports                   ProfileReport[]
 
   @@index([createdAt(sort: Desc)])
   @@index([ownerId])
@@ -261,4 +262,18 @@ model CircuitBreakerState {
   createdAt     DateTime  @default(now())
 
   @@map("circuit_breaker_states")
+}
+
+model ProfileReport {
+  id         String   @id @default(cuid())
+  profileId  String
+  reason     String
+  details    String?
+  reporterIp String
+  createdAt  DateTime @default(now())
+  profile    Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@index([profileId, createdAt(sort: Desc)])
+  @@map("profile_reports")
 }
