@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { API_BASE_URL } from "@/lib/config";
 import { useInfiniteScroll } from "@/hooks/use-infinite-scroll";
 import { EmptyState } from "@/components/empty-state";
@@ -223,9 +224,11 @@ export default function ExplorePage() {
                   className="rounded-[2rem] border border-white/10 bg-white/5 p-6 transition hover:border-mint/30 hover:bg-white/10"
                 >
                   {profile.avatarUrl ? (
-                    <img
+                    <Image
                       src={profile.avatarUrl}
                       alt={profile.displayName}
+                      width={80}
+                      height={80}
                       className="h-20 w-20 rounded-full object-cover mb-4"
                     />
                   ) : (

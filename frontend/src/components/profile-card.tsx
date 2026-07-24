@@ -1,5 +1,6 @@
 "use client";
 import { useState, useCallback, KeyboardEvent } from "react";
+import Image from "next/image";
 import { isValidStellarAddress, stellarExpertUrl } from "@/lib/stellar";
 import { useToast } from "@/lib/use-toast";
 import { SITE_URL } from "@/lib/config";
@@ -172,7 +173,13 @@ export function ProfileCard({
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex gap-4">
             {avatarUrl ? (
-              <img src={avatarUrl} alt={displayName} className="w-16 h-16 rounded-full object-cover" />
+              <Image
+                src={avatarUrl}
+                alt={displayName}
+                width={64}
+                height={64}
+                className="w-16 h-16 rounded-full object-cover"
+              />
             ) : (
               <div className="w-16 h-16 rounded-full bg-indigo-600 flex items-center justify-center text-white text-xl font-bold">
                 {(displayName?.slice(0, 2) || '?').toUpperCase()}

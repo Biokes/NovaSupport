@@ -13,8 +13,7 @@ import {
 import { motion } from "framer-motion";
 import { formatRateLimitedMessage, parseRateLimitInfo } from "@/lib/rate-limit";
 import { apiFetch } from "@/lib/api-client";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000";
+import { API_BASE_URL } from "@/lib/config";
 
 interface Stats {
   totalEarned: number;

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { AppShell } from "@/components/app-shell";
 import { Toast } from "@/components/toast";
 import { EmptyState } from "@/components/empty-state";
@@ -98,10 +99,11 @@ export default function RecurringPage() {
               >
                 <div className="flex items-center gap-3 min-w-0">
                   {sub.profileAvatarUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element -- arbitrary external avatar URLs, matches profile-card.tsx convention
-                    <img
+                    <Image
                       src={sub.profileAvatarUrl}
                       alt={sub.profileDisplayName}
+                      width={40}
+                      height={40}
                       className="h-10 w-10 rounded-full object-cover flex-shrink-0"
                     />
                   ) : (
