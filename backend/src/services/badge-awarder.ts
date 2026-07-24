@@ -82,6 +82,12 @@ export async function checkAndAwardBadges(profileId: string, prismaClient = pris
           case "milestone_reached":
             shouldAward = milestonesReached >= 1;
             break;
+          default:
+            logger.warn(
+              { criteria: badge.criteria, badgeId: badge.id },
+              "Unknown badge criteria — badge will never be auto-awarded",
+            );
+            break;
         }
 
         if (shouldAward) {

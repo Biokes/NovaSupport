@@ -16,7 +16,7 @@
 // walletAddress. This keeps the indexer eventually consistent with the
 // profile registry without blocking the hot path.
 
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient, Prisma } from "@prisma/client";
 import { logger } from "../logger.js";
 import { Metrics } from "../metrics.js";
 
@@ -197,6 +197,11 @@ export class EventIndexer {
             status: "SUCCESS",
           },
         });
+        // Heuristic: assume createdAt == updatedAt means this was an INSERT.
+        // On fast systems (ms-resolution timestamps), a duplicate event can land
+        // in the same millisecond as the insert, miscounting as an update.
+        // TODO: Use Postgres INSERT ... ON CONFLICT DO UPDATE RETURNING xmax,
+        // where xmax = 0 means INSERT and non-zero means UPDATE, for exact detection.
         if (result.createdAt.getTime() === result.updatedAt.getTime()) {
           ingested += 1;
         }
@@ -219,6 +224,7 @@ export class EventIndexer {
     const orphans = await this.prisma.supportTransaction.findMany({
       where: { profileId: "__orphan__" },
       select: { id: true, recipientAddress: true },
+      take: 100,
     });
 
     if (orphans.length === 0) return 0;
@@ -282,7 +288,7 @@ export class EventIndexer {
   }
 
   private async writeCursorWithinTx(
-    tx: any,
+    tx: Prisma.TransactionClient,
     token: string,
     ledger: number,
   ): Promise<void> {
