@@ -7,6 +7,9 @@ export const metadata: Metadata = {
   title: "NovaSupport",
   description:
     "Stellar-native support profiles for maintainers, creators, and developers.",
+  // #774: PWA manifest and theme color
+  manifest: "/manifest.json",
+  themeColor: "#00e5be",
   openGraph: {
     title: "NovaSupport",
     description:
