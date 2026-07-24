@@ -242,6 +242,15 @@ model AuthChallenge {
   @@map("auth_challenges")
 }
 
+model RevokedToken {
+  jti       String   @id
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@map("revoked_tokens")
+}
+
 model CircuitBreakerState {
   name          String    @id
   state         String

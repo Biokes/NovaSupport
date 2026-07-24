@@ -274,6 +274,16 @@ function createRateLimiters() {
     message: { error: "Too many auth attempts, please try again later." },
   });
 
+  // Federation / stellar.toml limiter — 30 requests per minute per IP (#763)
+  const federationLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => process.env.NODE_ENV === "test",
+    message: { error: "Too many requests, please try again later." },
+  });
+
   return {
     globalLimiter,
     writeLimiter,
@@ -281,6 +291,7 @@ function createRateLimiters() {
     resendLimiter,
     viewCountLimiter,
     authLimiter,
+    federationLimiter,
   };
 }
 
@@ -375,6 +386,7 @@ export function createApp(customLogger?: Logger) {
     resendLimiter,
     viewCountLimiter,
     authLimiter,
+    federationLimiter,
   } = createRateLimiters();
 
   const swaggerSpec = swaggerJsdoc({
@@ -478,7 +490,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
   // Spec: https://developers.stellar.org/docs/learn/encyclopedia/network-configuration/stellar-toml
   let tomlCache: { body: string; expiresAt: number } | null = null;
 
-  app.get("/.well-known/stellar.toml", async (_req, res) => {
+  app.get("/.well-known/stellar.toml", federationLimiter, async (_req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "public, max-age=60");
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -854,6 +866,40 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     });
 
     res.json({ token, walletAddress, userId: user.id });
+  });
+
+  /**
+   * @openapi
+   * /auth/logout:
+   *   post:
+   *     summary: Invalidate the current session server-side
+   *     description: |
+   *       Revokes the JWT presented in the Authorization header or auth_token cookie by
+   *       storing its jti until expiry, and clears the auth_token cookie.
+   *     security:
+   *       - bearerAuth: []
+   *     responses:
+   *       200:
+   *         description: Logged out
+   *       401:
+   *         description: Missing or invalid token
+   */
+  v1Router.post("/auth/logout", requireAuth, async (req, res) => {
+    try {
+      if (req.auth?.jti && req.auth.exp) {
+        await prisma.revokedToken.upsert({
+          where: { jti: req.auth.jti },
+          create: { jti: req.auth.jti, expiresAt: new Date(req.auth.exp * 1000) },
+          update: {},
+        });
+      }
+
+      res.clearCookie("auth_token");
+      res.json({ ok: true });
+    } catch (e: unknown) {
+      req.log.error({ err: e }, "database error during logout");
+      return sendError(res, 500, "Internal server error");
+    }
   });
 
   // ── List profiles with pagination ──────────────────────────────────────
@@ -4478,7 +4524,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
    *       404:
    *         description: No profile found for that username
    */
-  app.get("/federation", async (req, res) => {
+  app.get("/federation", federationLimiter, async (req, res) => {
     // Stellar spec requires CORS open to all origins on this endpoint
     res.setHeader("Access-Control-Allow-Origin", "*");
 
