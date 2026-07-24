@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { Toast } from "@/components/toast";
+import { OnboardingChecklist } from "@/components/onboarding-checklist";
 import { 
   TrendingUp, Users, Wallet, Activity, 
   ArrowUpRight, ArrowDownRight, Plus, Edit2, Trash2, X, Link2, Eye, EyeOff, Copy, Check, ChevronDown, ChevronRight, Download
@@ -392,6 +393,10 @@ export default function DashboardPage() {
             )}
           </div>
         </header>
+
+        {username && (
+          <OnboardingChecklist username={username} milestoneCount={milestones.length} />
+        )}
 
         {/* Summary Cards */}
         {stats && (

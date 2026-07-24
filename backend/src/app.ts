@@ -4124,7 +4124,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     // Supporter view — return the authenticated user's own drip subscriptions
     const subscriptions = await prisma.recurringSupport.findMany({
       where: { supporterId: user.id, status: { not: "cancelled" } },
-      include: { profile: { select: { username: true, displayName: true } } },
+      include: { profile: { select: { username: true, displayName: true, avatarUrl: true } } },
       orderBy: { createdAt: "desc" },
     });
 
@@ -4133,6 +4133,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       profileId: s.profileId,
       profileUsername: s.profile.username,
       profileDisplayName: s.profile.displayName,
+      profileAvatarUrl: s.profile.avatarUrl,
       amount: s.amount.toString(),
       assetCode: s.assetCode,
       frequency: s.frequency,
