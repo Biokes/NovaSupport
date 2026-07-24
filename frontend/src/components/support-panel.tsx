@@ -185,6 +185,7 @@ export function SupportPanel({
             profileId,
             amount,
             assetCode: paymentAsset.code,
+            assetIssuer: paymentAsset.issuer || undefined,
             frequency,
           }),
         }).catch(() => {
