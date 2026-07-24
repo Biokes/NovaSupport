@@ -59,20 +59,23 @@ export async function processDueRecurringSupports(prismaClient = prisma, now = n
           ? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
           : addMonths(now, 1);
 
-      await prismaClient.$transaction(async (tx: any) => {
-        // Create the pending RecurringSupportExecution
-        await tx.recurringSupportExecution.create({
-          data: {
-            recurringSupportId: support.id,
-            status: "pending",
-          },
-        });
+      // Atomic claim: only one scheduler instance wins the row
+      const claimed = await prismaClient.$executeRaw`
+        UPDATE "RecurringSupport"
+        SET "nextRunAt" = ${nextRunAt}
+        WHERE id = ${support.id} AND "nextRunAt" <= ${now}
+      `;
 
-        // Update the RecurringSupport
-        await tx.recurringSupport.update({
-          where: { id: support.id },
-          data: { nextRunAt },
-        });
+      if (claimed === 0) {
+        logger.info({ dripId: support.id }, "Recurring support already claimed by another process");
+        continue;
+      }
+
+      await prismaClient.recurringSupportExecution.create({
+        data: {
+          recurringSupportId: support.id,
+          status: "pending",
+        },
       });
 
       logger.info({
