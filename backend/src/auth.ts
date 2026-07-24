@@ -64,37 +64,55 @@ export function verifyJWT(token: string): AuthContext | null {
   }
 }
 
+// Accepts token from Authorization: Bearer header (API consumers)
+// OR from the httpOnly auth_token cookie set by POST /auth/verify (#759)
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  // 1. Try Authorization header first (API clients, mobile)
   const authHeader = req.headers.authorization;
-  
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  let token: string | undefined;
+
+  if (authHeader?.startsWith("Bearer ")) {
+    token = authHeader.substring(7);
+  } else if ((req as any).cookies?.auth_token) {
+    // 2. Fall back to httpOnly cookie (browser sessions)
+    token = (req as any).cookies.auth_token as string;
+  }
+
+  if (!token) {
     res.status(401).json({ error: "Unauthorized: Missing or invalid token" });
     return;
   }
-  
-  const token = authHeader.substring(7);
+
   const auth = verifyJWT(token);
-  
+
   if (!auth) {
     res.status(401).json({ error: "Unauthorized: Invalid or expired token" });
     return;
   }
-  
+
   req.auth = auth;
   next();
 }
 
+// Optionally attaches auth context; does NOT reject unauthenticated requests
+// Accepts token from Authorization: Bearer header OR httpOnly cookie (#759)
 export function optionalAuth(req: Request, res: Response, next: NextFunction): void {
+  let token: string | undefined;
+
   const authHeader = req.headers.authorization;
-  
   if (authHeader?.startsWith("Bearer ")) {
-    const token = authHeader.substring(7);
+    token = authHeader.substring(7);
+  } else if ((req as any).cookies?.auth_token) {
+    token = (req as any).cookies.auth_token as string;
+  }
+
+  if (token) {
     const auth = verifyJWT(token);
     if (auth) {
       req.auth = auth;
     }
   }
-  
+
   next();
 }
 

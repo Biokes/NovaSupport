@@ -1,4 +1,5 @@
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import express, { Response } from "express";
 import { randomBytes } from "node:crypto";
 import { rateLimit } from "express-rate-limit";
@@ -552,8 +553,12 @@ All errors return JSON with an \`error\` field and optional \`code\`:
           callback(new Error("Not allowed by CORS"));
         }
       },
+      // Required so browsers send the auth_token httpOnly cookie (#759)
+      credentials: true,
     }),
   );
+  // Parse cookie header so req.cookies.auth_token is available in requireAuth (#759)
+  app.use(cookieParser());
   app.use(express.json());
   app.use(compression({ threshold: 1024 }));
   app.use(sanitizeBody);
@@ -837,6 +842,16 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     if (process.env.SENTRY_DSN) {
       Sentry.setUser({ id: user.id, username: walletAddress });
     }
+
+    // #759: Set httpOnly cookie so the browser sends it automatically.
+    // The token is still returned in the JSON body for API / mobile consumers
+    // that cannot access httpOnly cookies.
+    res.cookie("auth_token", token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 1000, // 1 hour — matches JWT_EXPIRY
+    });
 
     res.json({ token, walletAddress, userId: user.id });
   });
