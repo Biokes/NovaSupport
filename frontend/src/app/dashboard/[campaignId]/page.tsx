@@ -348,6 +348,7 @@ export default function DashboardPage() {
   const [dripActionLoading, setDripActionLoading] = useState<string | null>(
     null,
   );
+  const [dripActionError, setDripActionError] = useState<string | null>(null);
   const [trends, setTrends] = useState({
     totalRaised: "—",
     totalRaisedPositive: true,
@@ -577,6 +578,7 @@ export default function DashboardPage() {
 
   async function handleDripAction(id: string, action: "paused" | "cancelled") {
     setDripActionLoading(id);
+    setDripActionError(null);
     try {
       const res = await apiFetch(`${API_BASE_URL}/recurring-support/${id}`, {
         method: "PATCH",
@@ -585,9 +587,14 @@ export default function DashboardPage() {
       });
       if (res.ok) {
         setDrips((prev) => prev.filter((d) => d.id !== id));
+      } else {
+        const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+        setDripActionError(
+          typeof body.error === "string" ? body.error : `Failed to ${action} drip`,
+        );
       }
     } catch {
-      // Silently fail
+      setDripActionError("Connection error — please try again");
     } finally {
       setDripActionLoading(null);
     }
@@ -1165,6 +1172,12 @@ export default function DashboardPage() {
                 No active drips{isOwner ? " set up for this profile" : ""}.
               </p>
             ) : (
+              <>
+                {dripActionError && (
+                  <p className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-400">
+                    {dripActionError}
+                  </p>
+                )}
               <div className="space-y-3">
                 {drips.map((drip) => (
                   <div
@@ -1220,6 +1233,7 @@ export default function DashboardPage() {
                   </div>
                 ))}
               </div>
+              </>
             )}
           </section>
         </div>
