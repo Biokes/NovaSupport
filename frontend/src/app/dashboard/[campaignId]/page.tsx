@@ -328,7 +328,6 @@ export default function DashboardPage() {
   const [assetBreakdown, setAssetBreakdown] = useState<AssetBreakdownEntry[]>(
     [],
   );
-  const [assetTotal, setAssetTotal] = useState(0);
   const [selectedPeriod, setSelectedPeriod] = useState<ChartRange>("30D");
   const [chartLoading, setChartLoading] = useState(true);
   const [connectedWallet, setConnectedWallet] = useState("");
@@ -385,7 +384,6 @@ export default function DashboardPage() {
             total: number;
           };
           setAssetBreakdown(assetsJson.breakdown ?? []);
-          setAssetTotal(assetsJson.total ?? 0);
         }
       } catch (err: any) {
         setError(err.message);
@@ -598,22 +596,19 @@ export default function DashboardPage() {
     setCsvLoading(true);
     try {
       const res = await apiFetch(
-        `${API_BASE_URL}/profiles/${campaignId}/transactions?limit=50`,
+        `${API_BASE_URL}/profiles/${campaignId}/transactions/csv`,
       );
-      if (!res.ok) throw new Error("Failed to fetch full transactions");
-      const json = (await res.json()) as {
-        transactions?: Array<Record<string, unknown>>;
-      };
-      const rows: TransactionCsvRow[] = (json.transactions ?? []).map((tx) => ({
-        createdAt: toString(tx.createdAt, new Date().toISOString()),
-        amount: toString(tx.amount, "0"),
-        assetCode: toString(tx.assetCode, "XLM"),
-        supporterAddress: toString(tx.supporterAddress, ""),
-        message: toString(tx.message, ""),
-        status: toString(tx.status, ""),
-        txHash: toString(tx.txHash, ""),
-      }));
-      downloadCsv(rows);
+      if (!res.ok) throw new Error("Failed to fetch transaction CSV");
+      const csv = await res.text();
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `novasupport-transactions-${campaignId}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (err: any) {
       setError(err.message ?? "Failed to download CSV");
     } finally {
@@ -1000,15 +995,18 @@ export default function DashboardPage() {
                 )}
               </div>
               {assetBreakdown.length > 0 && (
-                <div className="mt-4 border-t border-white/10 pt-4 text-center">
-                  <p className="text-[10px] uppercase tracking-widest text-steel">
+                <div className="mt-4 border-t border-white/10 pt-4 text-center space-y-1">
+                  <p className="text-[10px] uppercase tracking-widest text-steel mb-2">
                     Total Earned
                   </p>
-                  <p className="mt-1 text-xl font-bold text-white tabular-nums">
-                    {assetTotal.toLocaleString(undefined, {
-                      maximumFractionDigits: 7,
-                    })}
-                  </p>
+                  {assetBreakdown.map((a) => (
+                    <p key={a.assetCode} className="text-xl font-bold text-white tabular-nums">
+                      {a.amount.toLocaleString(undefined, {
+                        maximumFractionDigits: 7,
+                      })}{" "}
+                      {a.assetCode}
+                    </p>
+                  ))}
                 </div>
               )}
             </motion.div>
