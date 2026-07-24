@@ -1,5 +1,22 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        // Wildcard subdomain — matches any Supabase project's Storage host,
+        // since the project ref (NEXT_PUBLIC_SUPABASE_URL) differs per deployment.
+        hostname: "**.supabase.co",
+        pathname: "/storage/v1/object/**",
+      },
+      {
+        // avatarUrl can also come from GitHub profile import (backend/src/app.ts
+        // ghData.avatarUrl), which next/image also needs allowlisted.
+        protocol: "https",
+        hostname: "avatars.githubusercontent.com",
+      },
+    ],
+  },
   webpack: (config, { isServer }) => {
     if (!isServer) {
       config.resolve.fallback = {

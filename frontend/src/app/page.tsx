@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import { AppShell } from "@/components/app-shell";
 import { ProfileCard } from "@/components/profile-card";
 
@@ -175,9 +176,11 @@ export default async function HomePage() {
               >
                 <div className="flex items-center gap-3">
                   {profile.avatarUrl ? (
-                    <img
+                    <Image
                       src={profile.avatarUrl}
                       alt={profile.displayName}
+                      width={40}
+                      height={40}
                       className="h-10 w-10 rounded-full object-cover"
                     />
                   ) : (
