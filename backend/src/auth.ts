@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 import { randomBytes } from "node:crypto";
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
 import { logger } from "./logger.js";
+import { prisma } from "./db.js";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRY = "1h";
@@ -17,6 +18,8 @@ const JWT_SECRET_VALIDATED: string = JWT_SECRET;
 export type AuthContext = {
   walletAddress: string;
   userId?: string;
+  jti?: string;
+  exp?: number;
 };
 
 declare module "express" {
@@ -51,7 +54,7 @@ export function signJWT(walletAddress: string, userId?: string): string {
   return jwt.sign(
     { walletAddress, userId },
     JWT_SECRET_VALIDATED,
-    { expiresIn: JWT_EXPIRY }
+    { expiresIn: JWT_EXPIRY, jwtid: randomBytes(16).toString("hex") }
   );
 }
 
@@ -66,7 +69,7 @@ export function verifyJWT(token: string): AuthContext | null {
 
 // Accepts token from Authorization: Bearer header (API consumers)
 // OR from the httpOnly auth_token cookie set by POST /auth/verify (#759)
-export function requireAuth(req: Request, res: Response, next: NextFunction): void {
+export async function requireAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
   // 1. Try Authorization header first (API clients, mobile)
   const authHeader = req.headers.authorization;
   let token: string | undefined;
@@ -88,6 +91,22 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   if (!auth) {
     res.status(401).json({ error: "Unauthorized: Invalid or expired token" });
     return;
+  }
+
+  if (auth.jti) {
+    try {
+      const revoked = await prisma.revokedToken.findUnique({
+        where: { jti: auth.jti },
+      });
+      if (revoked) {
+        res.status(401).json({ error: "Unauthorized: Token has been revoked" });
+        return;
+      }
+    } catch (error) {
+      logger.error({ error }, "Failed to check token revocation status");
+      res.status(500).json({ error: "Internal server error" });
+      return;
+    }
   }
 
   req.auth = auth;
