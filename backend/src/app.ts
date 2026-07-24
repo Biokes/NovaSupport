@@ -2642,7 +2642,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
    *       500:
    *         description: Internal server error
    */
-  v1Router.get("/profiles/:username/transactions/export", requireAuth, async (req, res) => {
+  v1Router.get(["/profiles/:username/transactions/export", "/profiles/:username/transactions/csv"], requireAuth, async (req, res) => {
     const username = req.params.username as string;
     const { startDate, endDate, taxYear } = req.query;
 
