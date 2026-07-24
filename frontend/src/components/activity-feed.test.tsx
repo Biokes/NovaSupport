@@ -4,7 +4,17 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@testing-library/jest-dom";
+
+function renderWithQueryClient(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
 
 // ── Stub out Next.js Link so tests don't need a full Next.js context ────────
 vi.mock("next/link", () => ({
@@ -79,7 +89,7 @@ describe("ActivityFeed", () => {
     // Never resolves — keeps the component in loading state
     vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
 
-    render(<ActivityFeed username="octocat" limit={5} />);
+    renderWithQueryClient(<ActivityFeed username="octocat" limit={5} />);
 
     // The skeletons are animated pulse divs rendered during loading
     const skeletons = document.querySelectorAll(".animate-pulse");
@@ -88,25 +98,27 @@ describe("ActivityFeed", () => {
 
   it("renders 'No activity yet' when there are no transactions or milestones", async () => {
     stubFetch([]);
-    render(<ActivityFeed username="octocat" limit={5} />);
+    renderWithQueryClient(<ActivityFeed username="octocat" limit={5} />);
     await waitFor(() => expect(screen.getByText(/no activity yet/i)).toBeInTheDocument());
   });
 
   it("renders transaction items with correct amount, asset, and timestamp", async () => {
     const tx = makeTransaction("tx-1", { amount: "25.5000000", assetCode: "USDC" });
     stubFetch([tx]);
-    render(<ActivityFeed username="octocat" limit={5} />);
+    renderWithQueryClient(<ActivityFeed username="octocat" limit={5} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/25\.5000000/)).toBeInTheDocument();
-      expect(screen.getByText(/USDC/)).toBeInTheDocument();
+      // The amount appears both in the title and the metadata chip — assert
+      // on presence, not uniqueness, of the text.
+      expect(screen.getAllByText(/25\.5000000/).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/USDC/).length).toBeGreaterThan(0);
     });
   });
 
   it("shows 'Load more' button only when items exceed the limit prop", async () => {
     const txs = Array.from({ length: 8 }, (_, i) => makeTransaction(`tx-${i}`));
     stubFetch(txs);
-    render(<ActivityFeed username="octocat" limit={5} />);
+    renderWithQueryClient(<ActivityFeed username="octocat" limit={5} />);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /load more/i })).toBeInTheDocument();
@@ -116,7 +128,7 @@ describe("ActivityFeed", () => {
   it("does NOT show 'Load more' when items are within the limit", async () => {
     const txs = [makeTransaction("tx-0"), makeTransaction("tx-1")];
     stubFetch(txs);
-    render(<ActivityFeed username="octocat" limit={5} />);
+    renderWithQueryClient(<ActivityFeed username="octocat" limit={5} />);
 
     await waitFor(() => expect(screen.queryByText(/no activity yet/i)).not.toBeInTheDocument());
 
@@ -128,7 +140,7 @@ describe("ActivityFeed", () => {
       makeTransaction(`tx-${i}`, { amount: `${i + 1}.0000000` })
     );
     stubFetch(txs);
-    render(<ActivityFeed username="octocat" limit={3} />);
+    renderWithQueryClient(<ActivityFeed username="octocat" limit={3} />);
 
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /load more/i })).toBeInTheDocument()
@@ -146,7 +158,7 @@ describe("ActivityFeed", () => {
   it("renders milestone reached items with the milestone title", async () => {
     const milestone = makeMilestone("m-1", { title: "First 100 XLM" });
     stubFetch([], [milestone]);
-    render(<ActivityFeed username="octocat" limit={5} />);
+    renderWithQueryClient(<ActivityFeed username="octocat" limit={5} />);
 
     await waitFor(() => {
       expect(screen.getByText(/First 100 XLM/)).toBeInTheDocument();
@@ -157,7 +169,7 @@ describe("ActivityFeed", () => {
   it("renders the error message when fetch throws", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new Error("Network error"))));
 
-    render(<ActivityFeed username="octocat" limit={5} />);
+    renderWithQueryClient(<ActivityFeed username="octocat" limit={5} />);
 
     await waitFor(() => {
       expect(screen.getByText(/failed to load activity feed/i)).toBeInTheDocument();
@@ -179,7 +191,7 @@ describe("ActivityFeed", () => {
       })
     );
 
-    render(<ActivityFeed username="octocat" limit={5} />);
+    renderWithQueryClient(<ActivityFeed username="octocat" limit={5} />);
 
     await waitFor(() => {
       expect(screen.getByText(/milestone data could not be loaded/i)).toBeInTheDocument();

@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   TrendingUp,
   Send,
@@ -21,7 +22,6 @@ type ActivityItem = {
   title: string;
   description: string;
   timestamp: string;
-  icon: React.ReactNode;
   metadata?: {
     amount?: string;
     assetCode?: string;
@@ -74,102 +74,84 @@ type ActivityFeedProps = {
   limit?: number;
 };
 
-export function ActivityFeed({ username, limit = 10 }: ActivityFeedProps) {
-  const [activities, setActivities] = useState<ActivityItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [milestonesUnavailable, setMilestonesUnavailable] = useState(false);
-  const [displayedItems, setDisplayedItems] = useState(limit);
-  const [hasMore, setHasMore] = useState(false);
+async function fetchActivities(username: string, signal?: AbortSignal): Promise<{
+  items: ActivityItem[];
+  milestonesUnavailable: boolean;
+}> {
+  const [transactionsRes, milestonesRes] = await Promise.all([
+    fetch(`${API_BASE_URL}/profiles/${username}/transactions?limit=100`, { signal }),
+    fetch(`${API_BASE_URL}/profiles/${username}/milestones`, { signal }).catch(() => null),
+  ]);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    fetchActivities(controller.signal);
-    return () => controller.abort();
-  }, [username]);
+  const transactionsData = transactionsRes.ok
+    ? await transactionsRes.json()
+    : { transactions: [] };
 
-  async function fetchActivities(signal?: AbortSignal) {
-    try {
-      setLoading(true);
-      setError(null);
-      setMilestonesUnavailable(false);
+  const milestonesUnavailable = milestonesRes?.ok !== true;
+  const milestonesData = !milestonesUnavailable
+    ? await milestonesRes!.json()
+    : { milestones: [] };
 
-      const [transactionsRes, milestonesRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/profiles/${username}/transactions?limit=100`, { signal }),
-        fetch(`${API_BASE_URL}/profiles/${username}/milestones`, { signal }).catch(() => null),
-      ]);
+  const items: ActivityItem[] = [];
 
-      const transactionsData = transactionsRes.ok
-        ? await transactionsRes.json()
-        : { transactions: [] };
+  // Add transaction activities
+  const transactions = transactionsData.transactions || [];
+  transactions.forEach((tx: any) => {
+    items.push({
+      id: `tx-${tx.id}`,
+      type: "support",
+      title: `Received ${tx.amount} ${tx.assetCode}`,
+      description: `Support from ${truncateHash(tx.supporterAddress ?? '', 8)}`,
+      timestamp: tx.createdAt,
+      metadata: {
+        amount: tx.amount,
+        assetCode: tx.assetCode,
+        supporter: tx.supporterAddress,
+        txHash: tx.txHash,
+      },
+    });
+  });
 
-      const milestonesOk = milestonesRes?.ok === true;
-      if (!milestonesOk) {
-        setMilestonesUnavailable(true);
-      }
-      const milestonesData = milestonesOk
-        ? await milestonesRes!.json()
-        : { milestones: [] };
-
-      const items: ActivityItem[] = [];
-
-      // Add transaction activities
-      const transactions = transactionsData.transactions || [];
-      transactions.forEach((tx: any) => {
-        items.push({
-          id: `tx-${tx.id}`,
-          type: "support",
-          title: `Received ${tx.amount} ${tx.assetCode}`,
-          description: `Support from ${truncateHash(tx.supporterAddress ?? '', 8)}`,
-          timestamp: tx.createdAt,
-          icon: getActivityIcon("support"),
-          metadata: {
-            amount: tx.amount,
-            assetCode: tx.assetCode,
-            supporter: tx.supporterAddress,
-            txHash: tx.txHash,
-          },
-        });
+  // Add milestone activities
+  const milestones = milestonesData.milestones || [];
+  milestones.forEach((milestone: any) => {
+    if (milestone.reachedAt) {
+      items.push({
+        id: `milestone-${milestone.id}`,
+        type: "milestone",
+        title: `Milestone reached: ${milestone.title}`,
+        description: `Goal of ${milestone.targetAmount} ${milestone.assetCode} achieved`,
+        timestamp: milestone.reachedAt,
+        metadata: {
+          milestone: milestone.title,
+          amount: milestone.targetAmount,
+          assetCode: milestone.assetCode,
+        },
       });
-
-      // Add milestone activities
-      const milestones = milestonesData.milestones || [];
-      milestones.forEach((milestone: any) => {
-        if (milestone.reachedAt) {
-          items.push({
-            id: `milestone-${milestone.id}`,
-            type: "milestone",
-            title: `Milestone reached: ${milestone.title}`,
-            description: `Goal of ${milestone.targetAmount} ${milestone.assetCode} achieved`,
-            timestamp: milestone.reachedAt,
-            icon: getActivityIcon("milestone"),
-            metadata: {
-              milestone: milestone.title,
-              amount: milestone.targetAmount,
-              assetCode: milestone.assetCode,
-            },
-          });
-        }
-      });
-
-      // Sort by timestamp (newest first)
-      items.sort(
-        (a, b) =>
-          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
-
-      setActivities(items);
-      setHasMore(items.length > limit);
-    } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      console.error("Failed to fetch activities:", err);
-      setError("Failed to load activity feed");
-    } finally {
-      if (!signal?.aborted) setLoading(false);
     }
-  }
+  });
 
-  if (loading) {
+  // Sort by timestamp (newest first)
+  items.sort(
+    (a, b) =>
+      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  );
+
+  return { items, milestonesUnavailable };
+}
+
+export function ActivityFeed({ username, limit = 10 }: ActivityFeedProps) {
+  const [displayedItems, setDisplayedItems] = useState(limit);
+
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ["activity-feed", username],
+    queryFn: ({ signal }) => fetchActivities(username, signal),
+  });
+
+  const activities = data?.items ?? [];
+  const milestonesUnavailable = data?.milestonesUnavailable ?? false;
+
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
         <div className="space-y-4 w-full max-w-md">
@@ -187,7 +169,7 @@ export function ActivityFeed({ username, limit = 10 }: ActivityFeedProps) {
   if (error) {
     return (
       <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-4 text-sm text-red-400">
-        {error}
+        Failed to load activity feed
       </div>
     );
   }
@@ -203,7 +185,7 @@ export function ActivityFeed({ username, limit = 10 }: ActivityFeedProps) {
           <AlertTriangle className="h-4 w-4 flex-shrink-0" />
           <span>Milestone data could not be loaded — the feed may be incomplete.</span>
           <button
-            onClick={() => fetchActivities()}
+            onClick={() => refetch()}
             className="ml-auto flex-shrink-0 text-xs underline underline-offset-2 hover:text-yellow-300 transition"
           >
             Retry
@@ -231,7 +213,7 @@ export function ActivityFeed({ username, limit = 10 }: ActivityFeedProps) {
                 <div className="flex gap-4">
                   {/* Icon */}
                   <div className="flex-shrink-0 flex items-center justify-center h-10 w-10 rounded-full bg-white/5">
-                    {activity.icon}
+                    {getActivityIcon(activity.type)}
                   </div>
 
                   {/* Content */}
