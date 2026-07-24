@@ -5,10 +5,13 @@ import { Metrics } from "../metrics.js";
 
 const MAX_DELIVERY_ATTEMPTS = 3;
 
-export async function processPendingWebhookDeliveries() {
+export async function processPendingWebhookDeliveries(
+  prismaClient = prisma,
+  deliver = deliverWebhook,
+) {
   const now = new Date();
 
-  const pendingDeliveries = await prisma.webhookDelivery.findMany({
+  const pendingDeliveries = await prismaClient.webhookDelivery.findMany({
     where: {
       status: "pending",
       nextRetryAt: { lte: now },
@@ -26,17 +29,17 @@ export async function processPendingWebhookDeliveries() {
     // handler and the interval timer fire at the same time for the same row).
     // updateMany returns { count: 0 } instead of throwing when the row was
     // already claimed, so we can safely skip it.
-    const claimed = await prisma.webhookDelivery.updateMany({
+    const claimed = await prismaClient.webhookDelivery.updateMany({
       where: { id: delivery.id, status: "pending" },
       data: { status: "processing" },
     });
     if (claimed.count === 0) continue;
 
     const payload = delivery.payload as Record<string, unknown>;
-    const result = await deliverWebhook(delivery.webhook.url, delivery.webhook.secret, payload);
+    const result = await deliver(delivery.webhook.url, delivery.webhook.secret, payload);
 
     if (result.status === "success") {
-      await prisma.webhookDelivery.update({
+      await prismaClient.webhookDelivery.update({
         where: { id: delivery.id },
         data: {
           status: "success",
@@ -66,7 +69,7 @@ export async function processPendingWebhookDeliveries() {
         }
       }
 
-      await prisma.webhookDelivery.update({
+      await prismaClient.webhookDelivery.update({
         where: { id: delivery.id },
         data: {
           status: willRetry ? "pending" : "failed",
