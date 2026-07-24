@@ -588,7 +588,16 @@ export default function CreatePage() {
             </div>
 
             <p className="text-center text-[10px] uppercase tracking-[0.2em] text-steel/35">
-              By continuing you agree to the NovaSupport Protocol Terms.
+              By continuing you agree to the{" "}
+              <a
+                href="/terms"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-2 hover:text-steel/60 transition"
+              >
+                NovaSupport Protocol Terms
+              </a>
+              .
             </p>
           </div>
         </div>
