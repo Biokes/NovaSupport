@@ -578,8 +578,11 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 
   // ── Request ID middleware (#452) ──────────────────────────────────────
   app.use((req, res, next) => {
+    const clientId = req.headers["x-request-id"] as string | undefined;
     const requestId =
-      (req.headers["x-request-id"] as string) || randomBytes(16).toString("hex");
+      clientId && /^[a-zA-Z0-9\-_.]{1,64}$/.test(clientId)
+        ? clientId
+        : randomBytes(16).toString("hex");
     req.requestId = requestId;
     res.setHeader("X-Request-ID", requestId);
     next();
@@ -1263,6 +1266,8 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         >(
           `SELECT "username", "displayName"
           FROM "Profile"
+          WHERE similarity("username", $1) > 0.05
+            OR "username" ILIKE '%' || $1 || '%'
           ORDER BY similarity("username", $1) DESC
           LIMIT 3`,
           q,
@@ -1658,7 +1663,11 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 
     if (!parsed.success) {
       req.log.warn({ issues: parsed.error.flatten() }, "validation failed");
-      return sendError(res, 400, "Invalid request body");
+      return res.status(400).json({
+        error: "Validation failed",
+        code: "VALIDATION_ERROR",
+        fields: parsed.error.flatten().fieldErrors,
+      });
     }
 
     const {
@@ -1891,7 +1900,11 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 
       if (!parsed.success) {
         req.log.warn({ issues: parsed.error.flatten() }, "validation failed");
-        return sendError(res, 400, "Invalid request body");
+        return res.status(400).json({
+          error: "Validation failed",
+          code: "VALIDATION_ERROR",
+          fields: parsed.error.flatten().fieldErrors,
+        });
       }
 
       const username = req.params.username as string;
