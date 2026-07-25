@@ -284,6 +284,16 @@ function createRateLimiters() {
     message: { error: "Too many requests, please try again later." },
   });
 
+  // RSS feed limiter — 10 requests per minute per IP (#799)
+  const feedLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => process.env.NODE_ENV === "test",
+    message: { error: "Too many requests, please try again later." },
+  });
+
   return {
     globalLimiter,
     writeLimiter,
@@ -292,6 +302,7 @@ function createRateLimiters() {
     viewCountLimiter,
     authLimiter,
     federationLimiter,
+    feedLimiter,
   };
 }
 
@@ -387,6 +398,7 @@ export function createApp(customLogger?: Logger) {
     viewCountLimiter,
     authLimiter,
     federationLimiter,
+    feedLimiter,
   } = createRateLimiters();
 
   const swaggerSpec = swaggerJsdoc({
@@ -3356,7 +3368,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 
   // ── Profile RSS feed (#478) ───────────────────────────────────────────
 
-  v1Router.get("/profiles/:username/feed.xml", async (req, res) => {
+  v1Router.get("/profiles/:username/feed.xml", feedLimiter, async (req, res) => {
     const { username } = req.params;
 
     const profile = await prisma.profile.findUnique({
@@ -3973,9 +3985,21 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         return sendError(res, 400, "Invalid request body");
       }
 
+      if (milestone.status === "reached" && parsed.data.targetAmount !== undefined) {
+        return sendError(res, 400, "Cannot change targetAmount of a reached milestone");
+      }
+
+      const data: typeof parsed.data & { status?: string } = { ...parsed.data };
+      if (
+        parsed.data.targetAmount !== undefined &&
+        Number(milestone.currentAmount) >= Number(parsed.data.targetAmount)
+      ) {
+        data.status = "reached";
+      }
+
       const updated = await prisma.milestone.update({
         where: { id: milestoneId },
-        data: parsed.data,
+        data,
       });
 
       res.json(updated);
