@@ -17,7 +17,7 @@ type Profile = {
 };
 
 type SortOption = "newest" | "most_supported" | "most_transactions";
-type AssetFilter = "all" | "XLM" | "USDC";
+type AssetFilter = string;
 
 export default function ExplorePage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -26,6 +26,7 @@ export default function ExplorePage() {
   const [sort, setSort] = useState<SortOption>("newest");
   const [asset, setAsset] = useState<AssetFilter>("all");
   const [assetIssuer, setAssetIssuer] = useState<string>("");
+  const [availableAssets, setAvailableAssets] = useState<string[]>([]);
   const [availableIssuers, setAvailableIssuers] = useState<
     Array<{ code: string; issuer: string }>
   >([]);
@@ -49,14 +50,18 @@ export default function ExplorePage() {
   }, [sort, asset, assetIssuer]);
 
   useEffect(() => {
+    const assetCodes = new Set<string>();
     const issuers = new Set<string>();
     profiles.forEach((p) => {
       p.acceptedAssets.forEach((a) => {
+        assetCodes.add(a.code);
         if (a.issuer) {
           issuers.add(`${a.code}:${a.issuer}`);
         }
       });
     });
+    const uniqueAssets = Array.from(assetCodes).sort();
+    setAvailableAssets(uniqueAssets);
     const unique = Array.from(issuers)
       .map((str) => {
         const [code, issuer] = str.split(":");
@@ -158,14 +163,17 @@ export default function ExplorePage() {
             <select
               value={asset}
               onChange={(e) => {
-                setAsset(e.target.value as AssetFilter);
+                setAsset(e.target.value);
                 setAssetIssuer("");
               }}
               className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white focus:border-mint/50 focus:outline-none"
             >
               <option value="all">All</option>
-              <option value="XLM">XLM</option>
-              <option value="USDC">USDC</option>
+              {availableAssets.map((code) => (
+                <option key={code} value={code}>
+                  {code}
+                </option>
+              ))}
             </select>
           </div>
 

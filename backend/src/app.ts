@@ -38,6 +38,7 @@ import {
 import { processPendingWebhookDeliveries } from "./services/webhook-processor.js";
 import { getIsRedisAvailable } from "./services/redis.js";
 import { enqueueWebhookDelivery } from "./services/webhook-queue.js";
+import { addMonths } from "./services/drip-scheduler.js";
 import { sanitizeBody, sanitizeQuery } from "./middleware/sanitize.js";
 import { CircuitBreaker, type CircuitBreakerStorage, type State } from "./services/circuit-breaker.js";
 import {
@@ -4272,11 +4273,11 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     const user = await prisma.user.findFirst({ where: { email: req.auth!.walletAddress } });
     if (!user) return sendError(res, 401, "User not found");
 
-    const nextRunAt = new Date();
+    let nextRunAt: Date;
     if (frequency === "weekly") {
-      nextRunAt.setDate(nextRunAt.getDate() + 7);
+      nextRunAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     } else {
-      nextRunAt.setDate(nextRunAt.getDate() + 30);
+      nextRunAt = addMonths(new Date(), 1);
     }
 
     await prisma.recurringSupport.create({
@@ -4379,11 +4380,10 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     // Recalculate nextRunAt when frequency changes
     let nextRunAt: Date | undefined;
     if (frequency) {
-      nextRunAt = new Date();
       if (frequency === "weekly") {
-        nextRunAt.setDate(nextRunAt.getDate() + 7);
+        nextRunAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       } else {
-        nextRunAt.setDate(nextRunAt.getDate() + 30);
+        nextRunAt = addMonths(new Date(), 1);
       }
     }
 

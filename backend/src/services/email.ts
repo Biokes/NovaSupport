@@ -26,12 +26,13 @@ export async function sendSupportReceivedEmail({
   txHash,
 }: SendSupportReceivedEmailParams): Promise<void> {
   const subject = `You received ${amount} ${assetCode} on NovaSupport`;
-  
-  const truncatedAddress = fromAddress.length > 8 
+
+  const truncatedAddress = fromAddress.length > 8
     ? `${fromAddress.slice(0, 4)}...${fromAddress.slice(-4)}`
     : fromAddress;
 
-  const stellarExpertLink = `https://stellar.expert/explorer/testnet/tx/${txHash}`;
+  const network = process.env.STELLAR_NETWORK === "PUBLIC" ? "public" : "testnet";
+  const stellarExpertLink = `https://stellar.expert/explorer/${network}/tx/${txHash}`;
 
   const html = `
     <h2>You've received support!</h2>
