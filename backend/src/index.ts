@@ -86,6 +86,10 @@ if (!startupConfig.supabase.enabled) {
   );
 }
 
+if (!process.env.ADMIN_WALLET_ADDRESS) {
+  logger.warn("ADMIN_WALLET_ADDRESS is not set — admin endpoints are disabled");
+}
+
 if (startupConfig.horizonUrl.includes("testnet")) {
   logger.warn(
     { horizonUrl: startupConfig.horizonUrl },
