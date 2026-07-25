@@ -56,8 +56,8 @@ export async function processDueRecurringSupports(prismaClient = prisma, now = n
       // Calculate nextRunAt based on frequency
       const nextRunAt =
         support.frequency === "weekly"
-          ? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
-          : addMonths(now, 1);
+          ? new Date(support.nextRunAt.getTime() + 7 * 24 * 60 * 60 * 1000)
+          : addMonths(support.nextRunAt, 1);
 
       // Atomic claim: only one scheduler instance wins the row
       const claimed = await prismaClient.$executeRaw`
