@@ -216,14 +216,13 @@ export default async function ProfilePage({ params }: PageProps) {
 
   const activeMilestone = visibleMilestones.find((m) => m.status === "active");
   const milestoneProgress = activeMilestone
-    ? Math.min(
-        100,
-        Math.round(
-          (parseFloat(activeMilestone.currentAmount) /
-            parseFloat(activeMilestone.targetAmount)) *
-            100,
-        ),
-      )
+    ? (() => {
+        const target = parseFloat(activeMilestone.targetAmount);
+        const current = parseFloat(activeMilestone.currentAmount);
+        return target > 0
+          ? Math.min(100, Math.round((current / target) * 100))
+          : null;
+      })()
     : null;
 
   const sameAs = [

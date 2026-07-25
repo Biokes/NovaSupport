@@ -27,10 +27,11 @@ changes to the contract.
 
 ## What the contract does NOT guarantee
 
-- **No fund custody or transfer.** The contract does not hold, escrow, or move tokens.
-  Payments happen as a separate Stellar payment operation in the same transaction envelope,
-  outside the contract's execution. If the payment operation fails, the contract invocation
-  may still succeed (and vice versa) depending on transaction construction.
+- **Fund custody and transfer via Soroban token client.** The contract transfers tokens to itself
+  on `support()` and from itself on `withdraw()` using the Soroban token client. These transfers
+  are atomic — both succeed or both fail. `SupportCount` and recipient totals are stored in
+  persistent storage separately from the actual token balances. The backend is responsible for
+  reconciling on-chain balances with stored counts.
 
 - **No recipient validation.** The contract does not verify that `recipient` is a registered
   NovaSupport profile, a valid Stellar account, or has any relationship to the platform.
@@ -54,8 +55,9 @@ changes to the contract.
 - **Permissionless.** Anyone can call `support()` for any recipient address. There is no
   allowlist, role check, or admin gate on who may submit a support action.
 
-- **No admin key.** There is no admin or owner address stored in the contract. No upgrade
-  authority, pause function, or privileged operation exists.
+- **Admin key required for privileged operations.** The contract has an admin address that must
+  authorize pause/unpause operations via `require_auth()`. An upgrade path does not exist;
+  contract code is immutable once deployed.
 
 - **Immutable once deployed.** The contract has no `upgrade` entry point or admin key. Once deployed to a contract ID, the WASM cannot be altered. This ensures that the logic seen at the time of deployment is what will always execute for that ID. Any "upgrade" requires deploying a new contract instance and updating the platform to use the new ID.
 
@@ -105,3 +107,17 @@ Keep the old contract ID in release notes and monitoring so historical events re
 - **Global state is shared across all callers.** `SupportCount` is a single contract-wide
   counter. If you introduce per-user or per-recipient state, use a composite `DataKey`
   variant (e.g., `DataKey::UserCount(Address)`) to avoid collisions.
+
+---
+
+## Keeping this document in sync
+
+This document must be updated whenever `lib.rs` changes. Review the guarantees and limitations
+sections after any modification to the contract code, especially changes to:
+- Authorization checks (`require_auth()` calls)
+- Pause/unpause logic
+- Fund transfer operations
+- Storage model and TTL management
+
+An out-of-sync SECURITY.md can mislead the backend and frontend teams into incorrect assumptions
+about contract behaviour.
