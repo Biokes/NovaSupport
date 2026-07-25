@@ -70,7 +70,7 @@ export async function fetchGitHubProfile(
   try {
     response = await fetch(
       `${GITHUB_API_BASE}/users/${encodeURIComponent(username)}`,
-      { headers },
+      { headers, signal: AbortSignal.timeout(10_000) },
     );
   } catch (err) {
     throw new GitHubFetchError(0, err instanceof Error ? err.message : String(err));
