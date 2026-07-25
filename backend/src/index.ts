@@ -110,6 +110,7 @@ import { EventIndexer } from "./services/event-indexer.js";
 import { createSorobanRpcClient } from "./services/soroban-rpc-client.js";
 import { startWeeklyDigestScheduler, stopWeeklyDigestScheduler } from "./services/weekly-digest.js";
 import { prisma } from "./db.js";
+import { connectRedis, disconnectRedis } from "./services/redis.js";
 
 const port = Number(process.env.PORT ?? 4000);
 const indexerNetwork = process.env.INDEXER_NETWORK ?? "TESTNET";
@@ -142,6 +143,8 @@ const eventIndexer =
 let dripScheduler: ReturnType<typeof startDripScheduler> | null = null;
 let webhookProcessor: ReturnType<typeof startWebhookProcessor> | null = null;
 let shuttingDown = false;
+
+await connectRedis();
 
 const server = app.listen(port, () => {
   logger.info({ port }, `NovaSupport backend listening on http://localhost:${port}`);
@@ -190,6 +193,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     });
 
     await prisma.$disconnect();
+    await disconnectRedis();
     await Sentry.close(2_000);
     logger.info({ signal }, "Graceful shutdown complete");
     process.exit(signal === "SIGINT" ? 130 : 143);

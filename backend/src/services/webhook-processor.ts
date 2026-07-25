@@ -2,6 +2,14 @@ import { prisma } from "../db.js";
 import { logger } from "../logger.js";
 import { deliverWebhook, shouldRetry, getNextRetryDelay } from "./webhook.js";
 import { Metrics } from "../metrics.js";
+import { getIsRedisAvailable } from "./redis.js";
+import {
+  createWebhookQueue,
+  createWebhookWorker,
+  enqueueWebhookDelivery,
+  stopWebhookQueue,
+  getWebhookQueue,
+} from "./webhook-queue.js";
 
 const MAX_DELIVERY_ATTEMPTS = 3;
 
@@ -24,11 +32,6 @@ export async function processPendingWebhookDeliveries(
   });
 
   for (const delivery of pendingDeliveries) {
-    // Atomically claim the row before delivery to prevent duplicate sends when
-    // processPendingWebhookDeliveries is invoked concurrently (e.g., the HTTP
-    // handler and the interval timer fire at the same time for the same row).
-    // updateMany returns { count: 0 } instead of throwing when the row was
-    // already claimed, so we can safely skip it.
     const claimed = await prismaClient.webhookDelivery.updateMany({
       where: { id: delivery.id, status: "pending" },
       data: { status: "processing" },
@@ -36,7 +39,7 @@ export async function processPendingWebhookDeliveries(
     if (claimed.count === 0) continue;
 
     const payload = delivery.payload as Record<string, unknown>;
-    const result = await deliver(delivery.webhook.url, delivery.webhook.secret, payload);
+    const result = await deliver(delivery.webhook.url, delivery.webhook.secretHash, payload);
 
     if (result.status === "success") {
       await prismaClient.webhookDelivery.update({
@@ -56,11 +59,6 @@ export async function processPendingWebhookDeliveries(
       const nextAttempt = delivery.attemptCount + 1;
       const willRetry = result.willRetry && shouldRetry(nextAttempt);
 
-      // When permanently failed, nextRetryAt must be explicitly set to null so
-      // Prisma writes NULL to the column. Leaving it undefined causes Prisma to
-      // omit the field entirely, leaving any previous value in place and causing
-      // the processor's `nextRetryAt <= now` query to re-pick the delivery on
-      // the next poll cycle (#601).
       let nextRetryAt: Date | null = null;
       if (willRetry) {
         const delayMs = getNextRetryDelay(delivery.attemptCount);
@@ -116,9 +114,26 @@ function runWebhookProcessorTick(): void {
 }
 
 export function startWebhookProcessor(): WebhookProcessorHandle {
+  // When Redis is available, use BullMQ queue + worker instead of DB polling
+  if (getIsRedisAvailable()) {
+    logger.info("Redis available — starting BullMQ webhook queue");
+    createWebhookQueue();
+    createWebhookWorker();
+
+    return {
+      async stop() {
+        if (processorStopped) return;
+        processorStopped = true;
+        await stopWebhookQueue();
+        logger.info("BullMQ webhook queue stopped.");
+      },
+    };
+  }
+
+  // Fallback: DB-polled processor for local dev without Redis
   const interval = Number(process.env.WEBHOOK_PROCESSOR_INTERVAL_MS ?? 10000);
 
-  logger.info({ interval }, "Starting webhook processor...");
+  logger.info({ interval }, "Starting DB-polled webhook processor (no Redis)");
   processorStopped = false;
 
   processorInterval = setInterval(() => {

@@ -34,10 +34,10 @@ function makePrismaMock(overrides: {
   const profileFindMany = mock.fn(() =>
     Promise.resolve(overrides.profiles ?? [makeProfile()]),
   );
-  const txFindMany = mock.fn(() =>
+  const txFindMany = mock.fn((_arg?: unknown) =>
     Promise.resolve(overrides.transactions ?? [{ amount: 5n, assetCode: "XLM", createdAt: new Date() }]),
   );
-  const uniqueSupportersFindMany = mock.fn(() =>
+  const uniqueSupportersFindMany = mock.fn((_arg?: unknown) =>
     Promise.resolve(overrides.uniqueSupporters ?? [{ supporterAddress: "GABC" }]),
   );
   const milestoneFindMany = mock.fn(() =>
@@ -50,7 +50,7 @@ function makePrismaMock(overrides: {
   return {
     profile: { findMany: profileFindMany },
     supportTransaction: {
-      findMany: mock.fn((arg: { distinct?: string[] }) => {
+      findMany: mock.fn((arg?: { distinct?: string[] }) => {
         if (arg?.distinct) return uniqueSupportersFindMany(arg);
         return txFindMany(arg);
       }),
@@ -97,8 +97,9 @@ test("sendWeeklyDigests uses take: 100 in profile query", async () => {
 
   await sendWeeklyDigests(mockPrisma as any);
 
-  const arg = mockPrisma._profileFindMany.mock.calls[0]!.arguments[0] as { take: number };
-  assert.equal(arg.take, 100);
+  const call = mockPrisma._profileFindMany.mock.calls[0];
+  const arg = (call?.arguments as any)?.[0] as { take: number };
+  assert.equal(arg?.take, 100);
 });
 
 test("sendWeeklyDigests queries again when first batch is exactly 100 profiles", async () => {

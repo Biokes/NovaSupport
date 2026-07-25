@@ -36,6 +36,8 @@ import {
   type LeaderboardSort,
 } from "./services/profile-leaderboard-cache.js";
 import { processPendingWebhookDeliveries } from "./services/webhook-processor.js";
+import { getIsRedisAvailable } from "./services/redis.js";
+import { enqueueWebhookDelivery } from "./services/webhook-queue.js";
 import { sanitizeBody, sanitizeQuery } from "./middleware/sanitize.js";
 import { CircuitBreaker, type CircuitBreakerStorage, type State } from "./services/circuit-breaker.js";
 import {
@@ -527,7 +529,6 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     try {
       const profiles = await prisma.profile.findMany({
         select: { walletAddress: true },
-        where: { walletAddress: { not: null } },
         take: 10_000,
       });
 
@@ -2835,7 +2836,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 
     const secret = randomBytes(32).toString("hex");
     const webhook = await prisma.webhook.create({
-      data: { url: parsed.data.url, secret, profileId: profile.id },
+      data: { url: parsed.data.url, secretHash: secret, profileId: profile.id },
     });
 
     return res.status(201).json({ id: webhook.id, url: webhook.url, secret });
@@ -2915,7 +2916,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       return sendError(res, 404, "Profile not found");
     }
 
-    const cached = getCachedLeaderboard(profile.id, limit, offset, sort);
+    const cached = await getCachedLeaderboard(profile.id, limit, offset, sort);
     if (cached) {
       return res.json(cached);
     }
@@ -2965,7 +2966,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       sort,
     };
 
-    setCachedLeaderboard(profile.id, limit, offset, sort, payload);
+    await setCachedLeaderboard(profile.id, limit, offset, sort, payload);
     return res.json(payload);
   });
 
@@ -3268,7 +3269,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 
           return record;
         });
-        invalidateProfileLeaderboardCache(supportRecord.profileId);
+        void invalidateProfileLeaderboardCache(supportRecord.profileId);
       } catch (error: any) {
         if (error?.code === "P2002") {
           const existing = await prisma.supportTransaction.findUnique({
@@ -3353,7 +3354,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
             };
 
             // Persist for background delivery with exponential backoff (#webhook-persistence)
-            await prisma.webhookDelivery.create({
+            const delivery = await prisma.webhookDelivery.create({
               data: {
                 webhookId: webhook.id,
                 eventType: "support.received",
@@ -3361,6 +3362,13 @@ All errors return JSON with an \`error\` field and optional \`code\`:
                 status: "pending",
               },
             });
+
+            // When Redis is available, enqueue in BullMQ for immediate processing
+            if (getIsRedisAvailable()) {
+              enqueueWebhookDelivery(delivery.id).catch((err) => {
+                logger.warn({ deliveryId: delivery.id, err }, "Failed to enqueue webhook delivery");
+              });
+            }
           }
 
           await processPendingWebhookDeliveries();
@@ -3391,12 +3399,12 @@ All errors return JSON with an \`error\` field and optional \`code\`:
   // ── Profile RSS feed (#478) ───────────────────────────────────────────
 
   v1Router.get("/profiles/:username/feed.xml", feedLimiter, async (req, res) => {
-    const { username } = req.params;
+    const username = req.params.username as string;
 
     const profile = await prisma.profile.findUnique({
       where: { username },
       include: { milestones: { where: { status: "reached" }, orderBy: { updatedAt: "desc" }, take: 10 } },
-    });
+    }) as (Awaited<ReturnType<typeof prisma.profile.findUnique>> & { milestones: any[] }) | null;
 
     if (!profile) {
       return sendError(res, 404, "Profile not found");
@@ -4148,6 +4156,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
   });
 
   // ── Supporters ─────────────────────────────────────────────────────────
+  v1Router.get("/supporters/:address", async (req, res) => {
     try {
       const { address } = req.params;
 
@@ -4508,7 +4517,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       });
 
       // Invalidate leaderboard cache
-      invalidateProfileLeaderboardCache(profile.id);
+      void invalidateProfileLeaderboardCache(profile.id);
 
       req.log.info({ username, profileId: profile.id }, "Profile deleted successfully");
 
