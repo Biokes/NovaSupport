@@ -1,5 +1,13 @@
 import { sendEmail } from "../mailer.js";
 
+export function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 interface SendSupportReceivedEmailParams {
   to: string;
   fromAddress: string;
@@ -28,7 +36,7 @@ export async function sendSupportReceivedEmail({
   const html = `
     <h2>You've received support!</h2>
     <p>A supporter (${truncatedAddress}) has sent you <strong>${amount} ${assetCode}</strong>.</p>
-    ${message ? `<p><strong>Message:</strong> "${message}"</p>` : ""}
+    ${message ? `<p><strong>Message:</strong> "${escapeHtml(message)}"</p>` : ""}
     <p><a href="${stellarExpertLink}">View transaction on Stellar Expert</a></p>
     <br/>
     <p>Thanks,<br/>The NovaSupport Team</p>

@@ -27,7 +27,7 @@ import {
 } from "./auth.js";
 import multer from "multer";
 import { createClient } from "@supabase/supabase-js";
-import { sendSupportReceivedEmail } from "./services/email.js";
+import { sendSupportReceivedEmail, escapeHtml } from "./services/email.js";
 import { sendVerificationEmail } from "./emails/verify-email.js";
 import {
   getCachedLeaderboard,
@@ -4107,8 +4107,8 @@ All errors return JSON with an \`error\` field and optional \`code\`:
             subject: `[NovaSupport] Profile @${username} has ${reportCount} report(s)`,
             html: `
               <p>Profile <strong>@${username}</strong> has accumulated <strong>${reportCount}</strong> report(s).</p>
-              <p>Latest report reason: <strong>${parsed.data.reason}</strong></p>
-              ${parsed.data.details ? `<p>Details: ${parsed.data.details}</p>` : ""}
+              <p>Latest report reason: <strong>${escapeHtml(parsed.data.reason)}</strong></p>
+              ${parsed.data.details ? `<p>Details: ${escapeHtml(parsed.data.details)}</p>` : ""}
               <p>Please review this profile in the admin panel.</p>
             `,
           });
