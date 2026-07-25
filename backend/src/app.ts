@@ -441,7 +441,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 { "error": "Human-readable message", "code": "MACHINE_READABLE_CODE", "requestId": "abc123" }
 \`\`\``,
       },
-      servers: [{ url: "http://localhost:4000" }],
+      servers: [{ url: process.env.BACKEND_URL || "http://localhost:4000" }],
       components: {
         securitySchemes: {
           bearerAuth: {
@@ -494,7 +494,19 @@ All errors return JSON with an \`error\` field and optional \`code\`:
   });
 
   app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-  app.get("/docs.json", (req, res) => res.json(swaggerSpec));
+  app.get("/docs.json", (req, res) => {
+    const dynamicSpec = {
+      ...swaggerSpec,
+      servers: [
+        {
+          url: process.env.BACKEND_URL
+            ? process.env.BACKEND_URL.replace(/\/$/, "")
+            : `${req.protocol}://${req.get("host")}/api/v1`
+        }
+      ]
+    };
+    res.json(dynamicSpec);
+  });
 
   // ── Stellar TOML (#514) ───────────────────────────────────────────────
   // Must be registered before any other middleware that might intercept it.
