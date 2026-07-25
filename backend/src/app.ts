@@ -536,7 +536,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         .join("\n\n");
 
       const body = [
-        `NETWORK_PASSPHRASE="${process.env.STELLAR_NETWORK === 'MAINNET'
+        `NETWORK_PASSPHRASE="${process.env.STELLAR_NETWORK === 'PUBLIC'
           ? 'Public Global Stellar Network ; September 2015'
           : 'Test SDF Network ; September 2015'}"`,
         `FEDERATION_SERVER="https://api.novasupport.xyz/federation"`,
@@ -1042,10 +1042,13 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       let orderBy: object = { createdAt: "desc" };
 
       if (sort === "most_supported" || sort === "most_transactions") {
-        // For sorting by support metrics, we'll fetch all and sort in memory
-        // This is a simplified approach; for production, consider aggregation
+        // For sorting by support metrics, we fetch up to 1000 profiles to
+        // avoid loading unbounded rows into memory (#790). A production-grade
+        // solution should use a precomputed totalSupported column incremented
+        // transactionally. The take cap is a safe short-term mitigation.
         const profiles = await prisma.profile.findMany({
           where,
+          take: 1000,
           include: {
             acceptedAssets: true,
             supportTransactions: {
@@ -3155,13 +3158,20 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         assetIssuer: parsed.data.assetIssuer,
       };
 
-      // Verify the profile exists before touching Horizon (#574)
+      // Verify the profile exists and that recipientAddress matches its wallet
+      // before touching Horizon (#794). Without this check an attacker can
+      // supply a real tx hash paying their own wallet while pointing profileId
+      // at a victim — Horizon validation passes but the wrong profile is
+      // credited. Fetching walletAddress here closes that fraud vector.
       const profileExists = await prisma.profile.findUnique({
         where: { id: parsed.data.profileId },
-        select: { id: true },
+        select: { id: true, walletAddress: true },
       });
       if (!profileExists) {
         return sendError(res, 404, "Profile not found");
+      }
+      if (profileExists.walletAddress !== parsed.data.recipientAddress) {
+        return sendError(res, 400, "recipientAddress does not match profile wallet", "ADDRESS_MISMATCH");
       }
 
       const skipHorizonValidation = process.env.SKIP_HORIZON_VALIDATION === "true";

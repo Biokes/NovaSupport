@@ -101,3 +101,12 @@ jobs:
 
       - name: Build backend
         run: npm run build
+
+      - name: Upload source maps to Sentry
+        if: github.ref == 'refs/heads/main'
+        run: npx @sentry/cli releases files "$SENTRY_RELEASE" upload-sourcemaps ./dist
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: novasupport
+          SENTRY_PROJECT: novasupport-backend
+          SENTRY_RELEASE: ${{ github.sha }}
