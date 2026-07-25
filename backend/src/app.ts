@@ -3870,7 +3870,10 @@ All errors return JSON with an \`error\` field and optional \`code\`:
   const createMilestoneSchema = z.object({
     title: z.string().min(1).max(100),
     description: z.string().max(500).optional().nullable(),
-    targetAmount: z.string().min(1),
+    targetAmount: z
+      .string()
+      .regex(/^\d+(\.\d{1,7})?$/, "Must be a positive decimal with up to 7 places")
+      .refine((v) => parseFloat(v) > 0, "Must be greater than zero"),
     assetCode: z.string().default("XLM"),
   });
 
