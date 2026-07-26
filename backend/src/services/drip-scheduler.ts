@@ -5,7 +5,7 @@ import { Metrics } from "../metrics.js";
 
 const DRIP_BATCH_SIZE = 100;
 
-function addMonths(date: Date, months: number): Date {
+export function addMonths(date: Date, months: number): Date {
   const result = new Date(date);
   const targetMonth = result.getMonth() + months;
   result.setMonth(targetMonth);
