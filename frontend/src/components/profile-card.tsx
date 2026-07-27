@@ -3,7 +3,7 @@ import { useState, useCallback, KeyboardEvent } from "react";
 import Image from "next/image";
 import { isValidStellarAddress, stellarExpertUrl } from "@/lib/stellar";
 import { useToast } from "@/lib/use-toast";
-import { SITE_URL } from "@/lib/config";
+import { API_BASE_URL, SITE_URL } from "@/lib/config";
 import { apiFetch } from "@/lib/api-client";
 
 import { ProfileCardSkeleton } from "./skeleton";
@@ -64,7 +64,7 @@ export function ProfileCard({
   const handleResend = async () => {
     setResending(true);
     try {
-      const res = await apiFetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000'}/profiles/${username}/resend-verification-email`, {
+      const res = await apiFetch(`${API_BASE_URL}/profiles/${username}/resend-verification-email`, {
         method: "POST",
       });
       const data = await res.json();

@@ -2,6 +2,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { AppShell } from "@/components/app-shell";
 import { ProfileCard } from "@/components/profile-card";
+import { API_BASE_URL } from "@/lib/config";
 
 // ── Types ──────────────────────────────────────────────────────────────
 type Asset = { code: string; issuer?: string | null };
@@ -23,10 +24,8 @@ type Profile = {
 // ── Data fetching (server component) ──────────────────────────────────
 async function getFeaturedProfiles(): Promise<Profile[]> {
   try {
-    const apiUrl =
-      process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
     const res = await fetch(
-      `${apiUrl}/v1/profiles?limit=3&sort=most_supported`,
+      `${API_BASE_URL}/v1/profiles?limit=3&sort=most_supported`,
       { next: { revalidate: 300 } },
     );
     if (!res.ok) return [];
