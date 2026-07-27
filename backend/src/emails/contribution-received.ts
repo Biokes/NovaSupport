@@ -7,7 +7,8 @@ export function contributionReceivedEmail(params: {
 }): { subject: string; text: string; html: string } {
   const { creatorName, supporterAddress, amount, assetCode, message } = params;
 
-  const subject = `${supporterAddress} sent you a contribution of ${amount} ${assetCode}`;
+  const shortAddress = `${supporterAddress.slice(0, 6)}...${supporterAddress.slice(-4)}`;
+  const subject = `${shortAddress} sent you ${amount} ${assetCode}`;
 
   const messageSection = message ? `\nTheir message: "${message}"\n` : "";
 
