@@ -4114,6 +4114,9 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       }
 
       const reporterIp = req.ip ?? "unknown";
+      // Reports are used transiently for abuse detection; the reporter IP is
+      // purged after 90 days to comply with the privacy policy (#870).
+      const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
 
       await (prisma as any).profileReport.create({
         data: {
@@ -4121,6 +4124,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
           reason: parsed.data.reason,
           details: parsed.data.details ?? null,
           reporterIp,
+          expiresAt,
         },
       });
 

@@ -89,8 +89,11 @@ export default function PrivacyPage() {
           </h3>
           <ul className="list-disc pl-6 space-y-1 mt-1">
             <li>
-              IP addresses — used transiently for rate limiting and abuse
-              prevention; not linked to your profile and not stored long-term.
+              IP addresses — used transiently for rate limiting; not linked to
+              your profile and not stored long-term. When you submit a profile
+              report, the reporter&apos;s IP address is additionally retained
+              for up to 90 days to support abuse investigations, then
+              automatically purged.
             </li>
             <li>
               HTTP request logs — retained for up to 30 days for security and
