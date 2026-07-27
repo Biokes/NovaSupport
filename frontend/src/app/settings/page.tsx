@@ -60,6 +60,11 @@ export default function SettingsPage() {
     try {
       const res = await apiFetch(`${API_BASE_URL}/profiles/${username}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete profile");
+
+      // Revoke the JWT server-side so it can't keep authenticating requests
+      // as the now-deleted profile for the rest of its 1h expiry.
+      await apiFetch(`${API_BASE_URL}/v1/auth/logout`, { method: "POST" }).catch(() => {});
+
       localStorage.removeItem("username");
       router.push("/");
     } catch (err: unknown) {
