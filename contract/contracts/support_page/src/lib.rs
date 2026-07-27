@@ -322,6 +322,16 @@ pub fn unpause(e: Env) -> Result<(), Error> {
         st.set(&key, &(balance - amount));
         st.extend_ttl(&key, LEDGERS_THRESHOLD, LEDGERS_TO_LIVE);
 
+        let recipient_total_key = DataKey::RecipientTotal(recipient.clone());
+        let recipient_total: i128 = st.get(&recipient_total_key).unwrap_or(0);
+        let new_recipient_total = if recipient_total >= amount {
+            recipient_total - amount
+        } else {
+            0
+        };
+        st.set(&recipient_total_key, &new_recipient_total);
+        st.extend_ttl(&recipient_total_key, LEDGERS_THRESHOLD, LEDGERS_TO_LIVE);
+
         // Emit a withdraw event
         e.events()
             .publish((symbol_short!("withdraw"), caller, asset), amount);
@@ -340,6 +350,13 @@ pub fn unpause(e: Env) -> Result<(), Error> {
         e.storage()
             .persistent()
             .get(&DataKey::RecipientCount(r))
+            .unwrap_or(0)
+    }
+
+    pub fn get_recipient_total(e: Env, r: Address) -> i128 {
+        e.storage()
+            .persistent()
+            .get(&DataKey::RecipientTotal(r))
             .unwrap_or(0)
     }
 
@@ -395,6 +412,7 @@ mod test {
             client.get_total_by_asset(&recipient, &asset),
             8_000_000_i128
         );
+        assert_eq!(client.get_recipient_total(&recipient), 8_000_000_i128);
     }
 
     #[test]
@@ -479,11 +497,13 @@ mod test {
         );
 
         assert_eq!(client.get_total_by_asset(&recipient, &asset), 10_000_i128);
+        assert_eq!(client.get_recipient_total(&recipient), 10_000_i128);
 
         // Withdraw half
         client.withdraw(&recipient, &recipient, &asset, &5_000_i128);
 
         assert_eq!(client.get_total_by_asset(&recipient, &asset), 5_000_i128);
+        assert_eq!(client.get_recipient_total(&recipient), 5_000_i128);
 
         // Verify token balance of recipient
         let token_client = soroban_sdk::token::Client::new(&e, &asset);
