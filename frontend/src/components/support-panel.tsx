@@ -82,6 +82,10 @@ export function SupportPanel({
   const [frequency, setFrequency] = useState<"weekly" | "monthly">("monthly");
   const [sending, setSending] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
+  // Values captured at submit time so the result modal can keep displaying them
+  // after the live form fields are cleared (#708).
+  const [submittedAmount, setSubmittedAmount] = useState("");
+  const [submittedMessage, setSubmittedMessage] = useState("");
   const { showToast } = useToast();
 
   const handleCopy = useCallback(async () => {
@@ -108,7 +112,9 @@ export function SupportPanel({
     const parsedAmt = parseFloat(amount);
     const validAmount = !isNaN(parsedAmt) && parsedAmt > 0;
     const parsedBal = balance ? parseFloat(balance) : 0;
-    const overBalance = validAmount && parsedAmt + FEE_IN_XLM > parsedBal;
+    const overBalance = isXlmPayment
+      ? validAmount && parsedAmt + FEE_IN_XLM > parsedBal
+      : validAmount && parsedAmt > parsedBal;
     if (!visitorAddress || !validAmount || overBalance || sending) return;
 
     const walletId = (
@@ -163,6 +169,13 @@ export function SupportPanel({
       ) as Transaction | FeeBumpTransaction;
       const result = await horizonServer.submitTransaction(tx);
       setTxHash(result.hash);
+      // Snapshot the submitted values so the result modal keeps showing them,
+      // then clear the form fields. This prevents the user from accidentally
+      // re-sending the same amount/message once the modal closes (#708).
+      setSubmittedAmount(amount);
+      setSubmittedMessage(message);
+      setAmount("");
+      setMessage("");
 
       if (isRecurring && profileId) {
         await apiFetch(`${API_BASE_URL}/api/v1/recurring-support`, {
@@ -172,6 +185,7 @@ export function SupportPanel({
             profileId,
             amount,
             assetCode: paymentAsset.code,
+            assetIssuer: paymentAsset.issuer || undefined,
             frequency,
           }),
         }).catch(() => {
@@ -261,6 +275,13 @@ export function SupportPanel({
   const isOverBalance = insufficientBalance;
   const isValidAmount = hasValidAmount;
   const recipientAsset = { code: "XLM" };
+
+  const isXlmPayment = paymentAsset.code === "XLM";
+  const xlmBalance = parseFloat(
+    visitorBalances.find((b) => b.asset_type === "native")?.balance ?? "0"
+  );
+  const insufficientXlmForFee =
+    !isXlmPayment && hasValidAmount && xlmBalance < FEE_IN_XLM;
 
   if (!visitorAddress) {
     return (
@@ -648,10 +669,19 @@ export function SupportPanel({
         </div>
       )}
 
+      {insufficientXlmForFee && (
+        <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/5 p-3">
+          <p className="text-xs text-red-400">
+            Insufficient XLM balance. You need at least {FEE_IN_XLM.toFixed(7)}{" "}
+            XLM in your wallet to pay the Stellar network fee.
+          </p>
+        </div>
+      )}
+
       <button
         type="button"
         onClick={handleSend}
-        disabled={!hasValidAmount || insufficientBalance || sending}
+        disabled={!hasValidAmount || insufficientBalance || insufficientXlmForFee || sending}
         className="mt-6 w-full rounded-lg bg-mint px-4 py-3 text-sm font-semibold text-black hover:bg-mint/90 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
       >
         {sending ? "Sending…" : "Send Support"}
@@ -664,10 +694,10 @@ export function SupportPanel({
 
       <TransactionResultModal
         txHash={txHash}
-        amount={amount}
+        amount={submittedAmount}
         assetCode={paymentAsset.code || "XLM"}
         recipientDisplayName={recipientDisplayName}
-        note={message || null}
+        note={submittedMessage || null}
         isOpen={txHash !== null}
         onClose={() => setTxHash(null)}
       />

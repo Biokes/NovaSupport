@@ -53,6 +53,7 @@ export function ShareButton({ displayName, username }: ShareButtonProps) {
     <button
       type="button"
       onClick={handleShare}
+      aria-label={copied ? "Profile link copied" : `Share ${displayName}'s profile`}
       className="inline-flex min-h-[36px] items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs font-medium text-white hover:bg-white/10 transition-colors"
     >
       {copied ? (

@@ -12,6 +12,7 @@ import { EmbedCodeGenerator } from "@/components/embed-widget";
 import { MilestoneCard } from "@/components/milestone-card";
 import { ActivityFeed } from "@/components/activity-feed";
 import { EditProfileButton } from "@/components/edit-profile-button";
+import { ReportProfileModal } from "@/components/report-profile-modal";
 import { API_BASE_URL, SITE_URL } from "@/lib/config";
 import { stellarExpertUrl } from "@/lib/stellar";
 
@@ -28,6 +29,9 @@ type Profile = {
   bio: string;
   walletAddress: string;
   avatarUrl?: string | null;
+  websiteUrl?: string | null;
+  twitterHandle?: string | null;
+  githubHandle?: string | null;
   acceptedAssets: Array<{ code: string; issuer?: string | null }>;
   emailVerified?: boolean;
 };
@@ -38,7 +42,7 @@ type SupportTx = {
   assetCode: string;
   message?: string | null;
   createdAt: string;
-  senderAddress: string;
+  supporterAddress: string | null;
 };
 
 type Milestone = {
@@ -212,18 +216,46 @@ export default async function ProfilePage({ params }: PageProps) {
 
   const activeMilestone = visibleMilestones.find((m) => m.status === "active");
   const milestoneProgress = activeMilestone
-    ? Math.min(
-        100,
-        Math.round(
-          (parseFloat(activeMilestone.currentAmount) /
-            parseFloat(activeMilestone.targetAmount)) *
-            100,
-        ),
-      )
+    ? (() => {
+        const target = parseFloat(activeMilestone.targetAmount);
+        const current = parseFloat(activeMilestone.currentAmount);
+        return target > 0
+          ? Math.min(100, Math.round((current / target) * 100))
+          : null;
+      })()
     : null;
+
+  const sameAs = [
+    profile.websiteUrl,
+    profile.twitterHandle
+      ? `https://twitter.com/${profile.twitterHandle.replace(/^@/, "")}`
+      : null,
+    profile.githubHandle
+      ? `https://github.com/${profile.githubHandle.replace(/^@/, "")}`
+      : null,
+  ].filter(Boolean) as string[];
+
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "ProfilePage",
+    "mainEntity": {
+      "@type": "Person",
+      "name": profile.displayName,
+      "alternateName": profile.username,
+      "description": profile.bio || undefined,
+      "image": profile.avatarUrl || undefined,
+      "url": `${SITE_URL}/profile/${profile.username}`,
+      "identifier": profile.walletAddress,
+      ...(sameAs.length > 0 ? { sameAs } : {}),
+    },
+  };
 
   return (
     <AppShell>
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8 items-start animate-fade-in">
         <div className="space-y-12">
           <div className="space-y-3">
@@ -242,6 +274,7 @@ export default async function ProfilePage({ params }: PageProps) {
               <RSSFeedButton username={profile.username} />
               <ShareButton displayName={profile.displayName} username={profile.username} />
               <EditProfileButton username={profile.username} walletAddress={profile.walletAddress} />
+              <ReportProfileModal username={profile.username} displayName={profile.displayName} />
             </div>
           </div>
 
@@ -319,7 +352,7 @@ export default async function ProfilePage({ params }: PageProps) {
                     className="flex items-center justify-between gap-4"
                   >
                     <span className="text-xs text-sky/70">#{entry.rank}</span>
-                    
+                    <a
                       href={stellarExpertUrl("account", entry.supporterAddress)}
                       target="_blank"
                       rel="noopener noreferrer"

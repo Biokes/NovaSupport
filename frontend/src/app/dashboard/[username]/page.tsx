@@ -8,6 +8,7 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { API_BASE_URL } from "@/lib/config";
 import { apiFetch } from "@/lib/api-client";
 import { stellarExpertUrl } from "@/lib/stellar";
+import { getWalletAdapter, type WalletId } from "@/lib/wallet-adapters";
 import {
   AreaChart,
   Area,
@@ -320,14 +321,13 @@ type RecurringDrip = {
 };
 
 export default function DashboardPage() {
-  const { campaignId } = useParams<{ campaignId: string }>();
+  const { username } = useParams<{ username: string }>();
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [settings, setSettings] = useState<ProfileSettings | null>(null);
   const [chartData, setChartData] = useState<ChartPoint[]>([]);
   const [assetBreakdown, setAssetBreakdown] = useState<AssetBreakdownEntry[]>(
     [],
   );
-  const [assetTotal, setAssetTotal] = useState(0);
   const [selectedPeriod, setSelectedPeriod] = useState<ChartRange>("30D");
   const [chartLoading, setChartLoading] = useState(true);
   const [connectedWallet, setConnectedWallet] = useState("");
@@ -347,6 +347,7 @@ export default function DashboardPage() {
   const [dripActionLoading, setDripActionLoading] = useState<string | null>(
     null,
   );
+  const [dripActionError, setDripActionError] = useState<string | null>(null);
   const [trends, setTrends] = useState({
     totalRaised: "—",
     totalRaisedPositive: true,
@@ -358,9 +359,9 @@ export default function DashboardPage() {
     async function fetchData() {
       try {
         const [analyticsRes, profileRes, assetsRes] = await Promise.all([
-          apiFetch(`${API_BASE_URL}/analytics/${campaignId}`),
-          apiFetch(`${API_BASE_URL}/profiles/${campaignId}`),
-          apiFetch(`${API_BASE_URL}/profiles/${campaignId}/analytics/assets`),
+          apiFetch(`${API_BASE_URL}/analytics/${username}`),
+          apiFetch(`${API_BASE_URL}/profiles/${username}`),
+          apiFetch(`${API_BASE_URL}/profiles/${username}/analytics/assets`),
         ]);
         if (!analyticsRes.ok) throw new Error("Failed to fetch analytics");
         if (!profileRes.ok) throw new Error("Failed to fetch profile settings");
@@ -384,7 +385,6 @@ export default function DashboardPage() {
             total: number;
           };
           setAssetBreakdown(assetsJson.breakdown ?? []);
-          setAssetTotal(assetsJson.total ?? 0);
         }
       } catch (err: any) {
         setError(err.message);
@@ -393,7 +393,7 @@ export default function DashboardPage() {
       }
     }
     fetchData();
-  }, [campaignId]);
+  }, [username]);
 
   useEffect(() => {
     let cancelled = false;
@@ -404,7 +404,7 @@ export default function DashboardPage() {
       try {
         const from = getFromDate(selectedPeriod);
         const response = await apiFetch(
-          `${API_BASE_URL}/profiles/${campaignId}/analytics/timeseries?period=daily&from=${encodeURIComponent(from)}`,
+          `${API_BASE_URL}/profiles/${username}/analytics/timeseries?period=daily&from=${encodeURIComponent(from)}`,
         );
 
         if (!response.ok) {
@@ -431,23 +431,29 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [campaignId, selectedPeriod]);
+  }, [username, selectedPeriod]);
 
+  // #811: Use the wallet-adapter path so Albedo and Lobstr users also get
+  // their address resolved and isOwner evaluated correctly.
   useEffect(() => {
-    async function getFreighterAddress() {
+    async function resolveConnectedWallet() {
       try {
-        const { getAddress } = await import("@stellar/freighter-api");
-        const result = await getAddress();
-        if (result.error) {
+        const walletId =
+          typeof window !== "undefined"
+            ? (localStorage.getItem("walletId") as WalletId | null)
+            : null;
+        const adapter = walletId ? getWalletAdapter(walletId) : undefined;
+        if (!adapter) {
           setConnectedWallet("");
-        } else {
-          setConnectedWallet(result.address);
+          return;
         }
+        const address = await adapter.connect().catch(() => "");
+        setConnectedWallet(address);
       } catch {
         setConnectedWallet("");
       }
     }
-    getFreighterAddress();
+    resolveConnectedWallet();
   }, []);
 
   // Fetch two consecutive 30-day periods and compute period-over-period trends (#517)
@@ -465,10 +471,10 @@ export default function DashboardPage() {
 
         const [currRes, prevRes] = await Promise.all([
           apiFetch(
-            `${API_BASE_URL}/profiles/${campaignId}/analytics/timeseries?period=daily&from=${encodeURIComponent(periodStart)}&to=${encodeURIComponent(periodEnd)}`,
+            `${API_BASE_URL}/profiles/${username}/analytics/timeseries?period=daily&from=${encodeURIComponent(periodStart)}&to=${encodeURIComponent(periodEnd)}`,
           ),
           apiFetch(
-            `${API_BASE_URL}/profiles/${campaignId}/analytics/timeseries?period=daily&from=${encodeURIComponent(prevStart)}&to=${encodeURIComponent(periodStart)}`,
+            `${API_BASE_URL}/profiles/${username}/analytics/timeseries?period=daily&from=${encodeURIComponent(prevStart)}&to=${encodeURIComponent(periodStart)}`,
           ),
         ]);
 
@@ -524,7 +530,7 @@ export default function DashboardPage() {
       }
     }
     fetchTrends();
-  }, [campaignId]);
+  }, [username]);
 
   const isOwner = Boolean(
     settings?.walletAddress &&
@@ -541,7 +547,7 @@ export default function DashboardPage() {
       setDripsLoading(true);
       try {
         const endpoint = isOwner
-          ? `${API_BASE_URL}/recurring-support?profileId=${campaignId}`
+          ? `${API_BASE_URL}/recurring-support?profileId=${username}`
           : `${API_BASE_URL}/recurring-support`;
 
         const res = await apiFetch(endpoint);
@@ -566,10 +572,11 @@ export default function DashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [campaignId, isOwner]);
+  }, [username, isOwner]);
 
   async function handleDripAction(id: string, action: "paused" | "cancelled") {
     setDripActionLoading(id);
+    setDripActionError(null);
     try {
       const res = await apiFetch(`${API_BASE_URL}/recurring-support/${id}`, {
         method: "PATCH",
@@ -578,9 +585,14 @@ export default function DashboardPage() {
       });
       if (res.ok) {
         setDrips((prev) => prev.filter((d) => d.id !== id));
+      } else {
+        const body = await res.json().catch(() => ({})) as Record<string, unknown>;
+        setDripActionError(
+          typeof body.error === "string" ? body.error : `Failed to ${action} drip`,
+        );
       }
     } catch {
-      // Silently fail
+      setDripActionError("Connection error — please try again");
     } finally {
       setDripActionLoading(null);
     }
@@ -591,22 +603,19 @@ export default function DashboardPage() {
     setCsvLoading(true);
     try {
       const res = await apiFetch(
-        `${API_BASE_URL}/profiles/${campaignId}/transactions?limit=50`,
+        `${API_BASE_URL}/profiles/${username}/transactions/csv`,
       );
-      if (!res.ok) throw new Error("Failed to fetch full transactions");
-      const json = (await res.json()) as {
-        transactions?: Array<Record<string, unknown>>;
-      };
-      const rows: TransactionCsvRow[] = (json.transactions ?? []).map((tx) => ({
-        createdAt: toString(tx.createdAt, new Date().toISOString()),
-        amount: toString(tx.amount, "0"),
-        assetCode: toString(tx.assetCode, "XLM"),
-        supporterAddress: toString(tx.supporterAddress, ""),
-        message: toString(tx.message, ""),
-        status: toString(tx.status, ""),
-        txHash: toString(tx.txHash, ""),
-      }));
-      downloadCsv(rows);
+      if (!res.ok) throw new Error("Failed to fetch transaction CSV");
+      const csv = await res.text();
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `novasupport-transactions-${username}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     } catch (err: any) {
       setError(err.message ?? "Failed to download CSV");
     } finally {
@@ -620,7 +629,7 @@ export default function DashboardPage() {
     setSettingsSaving(true);
     setSettings({ ...settings, notifyOnSupport: next });
     try {
-      const res = await apiFetch(`${API_BASE_URL}/profiles/${campaignId}`, {
+      const res = await apiFetch(`${API_BASE_URL}/profiles/${username}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notifyOnSupport: next }),
@@ -642,7 +651,7 @@ export default function DashboardPage() {
     setVerificationBannerMsg(null);
     try {
       const res = await apiFetch(
-        `${API_BASE_URL}/profiles/${campaignId}/resend-verification-email`,
+        `${API_BASE_URL}/profiles/${username}/resend-verification-email`,
         {
           method: "POST",
         },
@@ -700,7 +709,7 @@ export default function DashboardPage() {
       <AppShell>
         <div className="mx-auto max-w-7xl space-y-8">
           <Link
-            href={`/profile/${campaignId}`}
+            href={`/profile/${username}`}
             className="text-sm text-indigo-500 hover:underline"
           >
             ← Back to profile
@@ -712,7 +721,7 @@ export default function DashboardPage() {
             </h1>
             <p className="text-steel">
               Real-time performance metrics for{" "}
-              <span className="text-white font-mono">{campaignId}</span>
+              <span className="text-white font-mono">{username}</span>
             </p>
           </header>
 
@@ -777,9 +786,16 @@ export default function DashboardPage() {
 
           {/* Summary Cards */}
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {/* #820: use dominant asset code instead of hardcoding XLM */}
             <StatCard
               title="Total Raised"
-              value={`${data.summary.totalRaised.toLocaleString()} XLM`}
+              value={`${data.summary.totalRaised.toLocaleString()} ${
+                assetBreakdown.length > 0
+                  ? assetBreakdown.reduce((a, b) =>
+                      a.value >= b.value ? a : b
+                    ).name
+                  : "XLM"
+              }`}
               icon={<Wallet className="text-mint" />}
               trend={trends.totalRaised}
               positive={trends.totalRaisedPositive}
@@ -793,7 +809,13 @@ export default function DashboardPage() {
             />
             <StatCard
               title="Avg. Support"
-              value={`${data.summary.avgContribution} XLM`}
+              value={`${data.summary.avgContribution} ${
+                assetBreakdown.length > 0
+                  ? assetBreakdown.reduce((a, b) =>
+                      a.value >= b.value ? a : b
+                    ).name
+                  : "XLM"
+              }`}
               icon={<TrendingUp className="text-gold" />}
               trend="—"
               positive={true}
@@ -980,15 +1002,18 @@ export default function DashboardPage() {
                 )}
               </div>
               {assetBreakdown.length > 0 && (
-                <div className="mt-4 border-t border-white/10 pt-4 text-center">
-                  <p className="text-[10px] uppercase tracking-widest text-steel">
+                <div className="mt-4 border-t border-white/10 pt-4 text-center space-y-1">
+                  <p className="text-[10px] uppercase tracking-widest text-steel mb-2">
                     Total Earned
                   </p>
-                  <p className="mt-1 text-xl font-bold text-white tabular-nums">
-                    {assetTotal.toLocaleString(undefined, {
-                      maximumFractionDigits: 7,
-                    })}
-                  </p>
+                  {assetBreakdown.map((a) => (
+                    <p key={a.assetCode} className="text-xl font-bold text-white tabular-nums">
+                      {a.amount.toLocaleString(undefined, {
+                        maximumFractionDigits: 7,
+                      })}{" "}
+                      {a.assetCode}
+                    </p>
+                  ))}
                 </div>
               )}
             </motion.div>
@@ -1145,6 +1170,12 @@ export default function DashboardPage() {
                 No active drips{isOwner ? " set up for this profile" : ""}.
               </p>
             ) : (
+              <>
+                {dripActionError && (
+                  <p className="mb-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-400">
+                    {dripActionError}
+                  </p>
+                )}
               <div className="space-y-3">
                 {drips.map((drip) => (
                   <div
@@ -1200,6 +1231,7 @@ export default function DashboardPage() {
                   </div>
                 ))}
               </div>
+              </>
             )}
           </section>
         </div>

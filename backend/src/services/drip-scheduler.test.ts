@@ -124,13 +124,7 @@ test("processDueRecurringSupports does not overflow into the wrong month at mont
     recurringSupports: [makeSupport({ frequency: "monthly", nextRunAt: jan31 })],
   });
 
-  const originalNow = Date.now;
-  Date.now = () => jan31.getTime();
-  try {
-    await processDueRecurringSupports(mockPrisma as any);
-  } finally {
-    Date.now = originalNow;
-  }
+  await processDueRecurringSupports(mockPrisma as any, jan31);
 
   const updateCall = getFirstArg<TxUpdateArg>(mockPrisma.txRecurringSupportUpdate);
   // Jan 31 + 1 month should clamp to Feb 29 (2024 is a leap year), not roll

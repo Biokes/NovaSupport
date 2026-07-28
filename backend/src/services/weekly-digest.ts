@@ -82,7 +82,7 @@ export async function sendWeeklyDigests(prismaClient = prisma) {
         if (txCount === 0) continue;
 
         const assetBreakdown = assetGroups
-          .map((g) => `${g._sum.amount?.toFixed(7) ?? "0"} ${g.assetCode}`)
+          .map((g) => `${g._sum.amount?.toString() ?? "0"} ${g.assetCode}`)
           .join(", ");
 
         const milestonesSection =

@@ -98,46 +98,68 @@ export async function getAnalytics(
   const cached = analyticsCache.get(cacheKey);
 
   if (cached && isCacheValid(cached.timestamp)) {
-    return cached.data;
+    return format === "csv" ? convertToCSV(cached.data) : cached.data;
   }
 
-  const transactions = await prisma.supportTransaction.findMany({
-    where: {
-      profileId,
-      createdAt: { gte: start, lte: end },
-    },
-    orderBy: { createdAt: "asc" },
-  });
+  // Aggregate in the database rather than loading every row into memory.
+  // SUM is computed by Postgres on the Decimal column, preserving precision
+  // (no Number() conversion), and only one row per day is returned.
+  const [dailyRows, summaryAgg, contributorRows, assetGroups] =
+    await Promise.all([
+      prisma.$queryRaw<
+        {
+          date: string;
+          total: string | null;
+          txCount: number;
+          uniqueContributors: number;
+        }[]
+      >`
+        SELECT
+          to_char("createdAt", 'YYYY-MM-DD') AS date,
+          SUM("amount")::text AS total,
+          COUNT(*)::int AS "txCount",
+          COUNT(DISTINCT "supporterAddress")::int AS "uniqueContributors"
+        FROM "SupportTransaction"
+        WHERE "profileId" = ${profileId}
+          AND "createdAt" >= ${start}
+          AND "createdAt" <= ${end}
+        GROUP BY 1
+        ORDER BY 1 ASC
+      `,
+      prisma.supportTransaction.aggregate({
+        where: { profileId, createdAt: { gte: start, lte: end } },
+        _sum: { amount: true },
+        _count: true,
+      }),
+      prisma.$queryRaw<{ count: number }[]>`
+        SELECT COUNT(DISTINCT "supporterAddress")::int AS count
+        FROM "SupportTransaction"
+        WHERE "profileId" = ${profileId}
+          AND "createdAt" >= ${start}
+          AND "createdAt" <= ${end}
+      `,
+      prisma.supportTransaction.groupBy({
+        by: ["assetCode"],
+        where: { profileId, createdAt: { gte: start, lte: end } },
+        _sum: { amount: true },
+        _count: true,
+      }),
+    ]);
 
-  // Group by date
-  const groupedByDate = new Map<string, any[]>();
-  transactions.forEach((tx) => {
-    const date = tx.createdAt.toISOString().split("T")[0];
-    if (!groupedByDate.has(date)) {
-      groupedByDate.set(date, []);
-    }
-    groupedByDate.get(date)!.push(tx);
-  });
-
-  // Calculate metrics
-  const dailyData: DailyContribution[] = Array.from(
-    groupedByDate.entries()
-  ).map(([date, txs]) => {
-    const amount = txs
-      .reduce((sum, tx) => sum + Number(tx.amount), 0)
-      .toString();
-    const uniqueContributors = new Set(
-      txs.map((tx) => tx.supporterAddress)
-    ).size;
-    const avgContribution = (
-      Number(amount) / txs.length
-    ).toString();
-
+  // Per-day metrics, keeping amounts as decimal strings.
+  const dailyData: DailyContribution[] = dailyRows.map((row) => {
+    // Normalize Postgres numeric text (e.g. "150.0000000") to "150".
+    const amount =
+      row.total != null ? new Prisma.Decimal(row.total).toString() : "0";
+    const avgContribution =
+      row.txCount > 0
+        ? new Prisma.Decimal(amount).div(row.txCount).toString()
+        : "0";
     return {
-      date,
+      date: row.date,
       amount,
-      count: txs.length,
-      uniqueContributors,
+      count: row.txCount,
+      uniqueContributors: row.uniqueContributors,
       avgContribution,
     };
   });
@@ -165,20 +187,15 @@ export async function getAnalytics(
     currentDate.setDate(currentDate.getDate() + 1);
   }
 
-  // Calculate summary
-  const totalAmount = filledData
-    .reduce((sum, d) => sum + Number(d.amount), 0)
-    .toString();
-  const totalContributors = new Set(
-    transactions.map((tx) => tx.supporterAddress)
-  ).size;
-  // Calculate average daily contribution based on days with activity, not total calendar days
-  const activeDays = filledData.filter((d) => d.count > 0).length;
-  const avgDailyContribution = (
-    activeDays > 0
-      ? filledData.reduce((sum, d) => sum + Number(d.amount), 0) / activeDays
-      : 0
+  // Calculate summary using Decimal arithmetic to avoid precision loss.
+  const totalAmount = (
+    summaryAgg._sum.amount ?? new Prisma.Decimal(0)
   ).toString();
+  const totalContributors = contributorRows[0]?.count ?? 0;
+  const avgDailyContribution =
+    filledData.length > 0
+      ? new Prisma.Decimal(totalAmount).div(filledData.length).toString()
+      : "0";
 
   const result = {
     profileId,
@@ -186,37 +203,23 @@ export async function getAnalytics(
       totalRaised: totalAmount,
       totalContributors,
       avgDailyContribution,
-      transactionCount: transactions.length,
+      transactionCount: summaryAgg._count,
       dateRange: { start: start.toISOString(), end: end.toISOString() },
     },
     dailyContributions: filledData,
-    assetBreakdown: Object.values(
-      transactions.reduce(
-        (acc, tx) => {
-          if (!acc[tx.assetCode]) {
-            acc[tx.assetCode] = {
-              asset: tx.assetCode,
-              amount: 0,
-              count: 0,
-            };
-          }
-          acc[tx.assetCode].amount += Number(tx.amount);
-          acc[tx.assetCode].count += 1;
-          return acc;
-        },
-        {} as Record<string, any>
-      )
-    ),
+    assetBreakdown: assetGroups.map((group) => ({
+      asset: group.assetCode,
+      amount: (group._sum.amount ?? new Prisma.Decimal(0)).toString(),
+      count: group._count,
+    })),
   };
 
   analyticsCache.set(cacheKey, { data: result, timestamp: Date.now() });
 
-  // Evict oldest entries if cache exceeds maximum size
-  // Delete 20% of entries when limit is exceeded to reduce eviction frequency
+  // Evict oldest entries when the cache exceeds max size to prevent OOM
   if (analyticsCache.size > CACHE_MAX_SIZE) {
-    const entriesToDelete = Math.ceil(CACHE_MAX_SIZE * 0.2);
-    const keysToDelete = Array.from(analyticsCache.keys()).slice(0, entriesToDelete);
-    keysToDelete.forEach((key) => analyticsCache.delete(key));
+    const oldest = analyticsCache.keys().next().value;
+    if (oldest !== undefined) analyticsCache.delete(oldest);
   }
 
   if (format === "csv") {

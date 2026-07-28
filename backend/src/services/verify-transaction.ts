@@ -11,6 +11,11 @@ export interface ExpectedTxDetails {
 // Module-level cache shared across all calls in the same process
 const verificationCache = new Map<string, { result: boolean; timestamp: number }>();
 export const VERIFICATION_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+export const NEGATIVE_CACHE_TTL = 30 * 1000; // 30 seconds for false/error results
+
+function normalizeAmount(amount: string): string {
+  return parseFloat(amount).toFixed(7);
+}
 
 export function clearVerificationCache(): void {
   verificationCache.clear();
@@ -32,7 +37,8 @@ function isAssetMatch(
 }
 
 // Scan the transaction's operations for a payment that matches all expected details.
-// Supports both `payment` and `create_account` (XLM-only) operation types.
+// Supports `payment`, `create_account` (XLM-only), `path_payment_strict_send`,
+// and `path_payment_strict_receive` operation types.
 async function validatePaymentDetails(
   server: Horizon.Server,
   txHash: string,
@@ -51,7 +57,7 @@ async function validatePaymentDetails(
       };
       if (
         p.to === expected.recipientAddress &&
-        parseFloat(p.amount) === parseFloat(expected.amount) &&
+        normalizeAmount(p.amount) === normalizeAmount(expected.amount) &&
         isAssetMatch(p, expected.assetCode, expected.assetIssuer)
       ) {
         return true;
@@ -64,7 +70,39 @@ async function validatePaymentDetails(
       if (
         wantNative &&
         c.account === expected.recipientAddress &&
-        parseFloat(c.starting_balance) === parseFloat(expected.amount)
+        normalizeAmount(c.starting_balance) === normalizeAmount(expected.amount)
+      ) {
+        return true;
+      }
+    }
+
+    // Path payments: the destination asset and amount received are what matter
+    // for the recipient, not the source asset the sender used.
+    if (
+      op.type === "path_payment_strict_send" ||
+      op.type === "path_payment_strict_receive"
+    ) {
+      const p = op as unknown as {
+        to: string;
+        // path_payment_strict_send: amount received by destination
+        destination_amount?: string;
+        // path_payment_strict_receive: the exact amount the destination receives
+        amount?: string;
+        asset_type: string;
+        asset_code?: string;
+        asset_issuer?: string;
+      };
+      // The received amount field differs between the two op types
+      const receivedAmount =
+        op.type === "path_payment_strict_receive"
+          ? p.amount
+          : p.destination_amount;
+
+      if (
+        p.to === expected.recipientAddress &&
+        receivedAmount !== undefined &&
+        normalizeAmount(receivedAmount) === normalizeAmount(expected.amount) &&
+        isAssetMatch(p, expected.assetCode, expected.assetIssuer)
       ) {
         return true;
       }
@@ -108,8 +146,11 @@ export async function verifyTransaction(
 ): Promise<boolean | "error"> {
   const cacheKey = makeCacheKey(txHash, expected);
   const cached = verificationCache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < VERIFICATION_CACHE_TTL) {
-    return cached.result;
+  if (cached) {
+    const ttl = cached.result === true ? VERIFICATION_CACHE_TTL : NEGATIVE_CACHE_TTL;
+    if (Date.now() - cached.timestamp < ttl) {
+      return cached.result;
+    }
   }
 
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -117,12 +158,14 @@ export async function verifyTransaction(
       const tx = await server.transactions().transaction(txHash).call();
 
       if (!tx.successful) {
+        verificationCache.set(cacheKey, { result: false, timestamp: Date.now() });
         return false;
       }
 
       if (expected) {
         const valid = await validatePaymentDetails(server, txHash, expected);
         if (!valid) {
+          verificationCache.set(cacheKey, { result: false, timestamp: Date.now() });
           return false;
         }
       }
@@ -131,6 +174,7 @@ export async function verifyTransaction(
       return true;
     } catch (e: unknown) {
       if (isHorizon404(e)) {
+        verificationCache.set(cacheKey, { result: false, timestamp: Date.now() });
         return false;
       }
 
@@ -144,5 +188,6 @@ export async function verifyTransaction(
     }
   }
 
+  verificationCache.set(cacheKey, { result: "error" as any, timestamp: Date.now() });
   return "error";
 }

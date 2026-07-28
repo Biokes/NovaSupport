@@ -92,8 +92,8 @@ export default function CreatePage() {
   const rateLimited = rateLimitRemainingMinutes > 0;
   const usernameFieldError =
     fieldErrors.username ??
-    (form.username && !/^[a-zA-Z0-9\-]+$/.test(form.username)
-      ? "Username can only contain alphanumeric characters and hyphens."
+    (form.username && !/^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?$/.test(form.username)
+      ? "Username can only contain alphanumeric characters and hyphens, and must start and end with an alphanumeric character."
       : null);
 
   function set(field: keyof FormData) {
@@ -137,8 +137,8 @@ export default function CreatePage() {
         setError("Display name and username are required.");
         return;
       }
-      if (!/^[a-zA-Z0-9\-]+$/.test(form.username)) {
-        setError("Username can only contain alphanumeric characters and hyphens.");
+      if (!/^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?$/.test(form.username)) {
+        setError("Username can only contain alphanumeric characters and hyphens, and must start and end with an alphanumeric character.");
         return;
       }
     }
@@ -430,6 +430,12 @@ export default function CreatePage() {
                         key={asset}
                         type="button"
                         onClick={() => {
+                          const isSelected = assets.some((a) => a.code === asset);
+                          setAssets(
+                            isSelected
+                              ? assets.filter((a) => a.code !== asset)
+                              : [...assets, { code: asset, issuer: "" }]
+                          );
                           setForm((prev) => ({
                             ...prev,
                             acceptedAssets: prev.acceptedAssets.includes(asset)
@@ -438,7 +444,7 @@ export default function CreatePage() {
                           }));
                         }}
                         className={`rounded-xl border px-4 py-2 text-xs font-semibold transition ${
-                          form.acceptedAssets.includes(asset)
+                          assets.some((a) => a.code === asset)
                             ? "border-mint bg-mint/10 text-mint"
                             : "border-white/10 bg-white/5 text-steel hover:border-white/20"
                         }`}
@@ -582,7 +588,16 @@ export default function CreatePage() {
             </div>
 
             <p className="text-center text-[10px] uppercase tracking-[0.2em] text-steel/35">
-              By continuing you agree to the NovaSupport Protocol Terms.
+              By continuing you agree to the{" "}
+              <a
+                href="/terms"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-2 hover:text-steel/60 transition"
+              >
+                NovaSupport Protocol Terms
+              </a>
+              .
             </p>
           </div>
         </div>

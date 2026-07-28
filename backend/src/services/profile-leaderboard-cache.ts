@@ -1,3 +1,5 @@
+import { getRedisClient, getIsRedisAvailable } from "./redis.js";
+
 export type LeaderboardSort = "total_amount" | "transaction_count";
 
 export type LeaderboardEntry = {
@@ -21,47 +23,101 @@ type CachedLeaderboard = {
   value: LeaderboardResponse;
 };
 
-const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_TTL_SECONDS = 5 * 60;
+const CACHE_KEY_PREFIX = "lb:";
+
+// In-process fallback cache
 const leaderboardCache = new Map<string, CachedLeaderboard>();
 
 function cacheKey(profileId: string, limit: number, offset: number, sort: LeaderboardSort) {
   return `${profileId}:${limit}:${offset}:${sort}`;
 }
 
-export function getCachedLeaderboard(
+function redisKey(key: string) {
+  return `${CACHE_KEY_PREFIX}${key}`;
+}
+
+export async function getCachedLeaderboard(
   profileId: string,
   limit: number,
   offset: number,
   sort: LeaderboardSort,
-): LeaderboardResponse | null {
+): Promise<LeaderboardResponse | null> {
   const key = cacheKey(profileId, limit, offset, sort);
-  const cached = leaderboardCache.get(key);
 
+  if (getIsRedisAvailable()) {
+    const redis = getRedisClient()!;
+    try {
+      const raw = await redis.get(redisKey(key));
+      if (raw) return JSON.parse(raw) as LeaderboardResponse;
+      return null;
+    } catch {
+      return getInProcessCache(key);
+    }
+  }
+
+  return getInProcessCache(key);
+}
+
+function getInProcessCache(key: string): LeaderboardResponse | null {
+  const cached = leaderboardCache.get(key);
   if (!cached) return null;
   if (cached.expiresAt <= Date.now()) {
     leaderboardCache.delete(key);
     return null;
   }
-
   return cached.value;
 }
 
-export function setCachedLeaderboard(
+export async function setCachedLeaderboard(
   profileId: string,
   limit: number,
   offset: number,
   sort: LeaderboardSort,
   value: LeaderboardResponse,
-): void {
-  leaderboardCache.set(cacheKey(profileId, limit, offset, sort), {
-    expiresAt: Date.now() + CACHE_TTL_MS,
+): Promise<void> {
+  const key = cacheKey(profileId, limit, offset, sort);
+
+  if (getIsRedisAvailable()) {
+    const redis = getRedisClient()!;
+    try {
+      await redis.setex(redisKey(key), CACHE_TTL_SECONDS, JSON.stringify(value));
+    } catch {
+      setInProcessCache(key, value);
+    }
+    return;
+  }
+
+  setInProcessCache(key, value);
+}
+
+function setInProcessCache(key: string, value: LeaderboardResponse): void {
+  leaderboardCache.set(key, {
+    expiresAt: Date.now() + CACHE_TTL_SECONDS * 1000,
     value,
   });
 }
 
-export function invalidateProfileLeaderboardCache(profileId: string): void {
-  const prefix = `${profileId}:`;
+export async function invalidateProfileLeaderboardCache(profileId: string): Promise<void> {
+  if (getIsRedisAvailable()) {
+    const redis = getRedisClient()!;
+    try {
+      const pattern = `${CACHE_KEY_PREFIX}${profileId}:*`;
+      const keys = await redis.keys(pattern);
+      if (keys.length > 0) {
+        await redis.del(...keys);
+      }
+    } catch {
+      invalidateInProcessCache(profileId);
+    }
+    return;
+  }
 
+  invalidateInProcessCache(profileId);
+}
+
+function invalidateInProcessCache(profileId: string): void {
+  const prefix = `${profileId}:`;
   for (const key of leaderboardCache.keys()) {
     if (key.startsWith(prefix)) {
       leaderboardCache.delete(key);

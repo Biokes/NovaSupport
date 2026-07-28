@@ -3,8 +3,12 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import { getAddress } from "@stellar/freighter-api";
 import { AppShell } from "@/components/app-shell";
+import { getWalletAdapter, type WalletId } from "@/lib/wallet-adapters";
 import { API_BASE_URL } from "@/lib/config";
 import { apiFetch } from "@/lib/api-client";
 import { useToast } from "@/lib/use-toast";
@@ -23,37 +27,43 @@ type ProfileData = {
   acceptedAssets: Array<{ code: string; issuer?: string | null }>;
 };
 
-type FieldErrors = {
-  displayName?: string;
-  bio?: string;
-  websiteUrl?: string;
-  twitterHandle?: string;
-  githubHandle?: string;
-  email?: string;
-};
+const editProfileSchema = z.object({
+  displayName: z
+    .string()
+    .trim()
+    .min(1, "Display name is required.")
+    .max(64, "Max 64 characters."),
+  bio: z.string().max(280, "Max 280 characters."),
+  websiteUrl: z
+    .string()
+    .refine((v) => v === "" || /^https:\/\/.+/.test(v), "Must start with https://"),
+  twitterHandle: z
+    .string()
+    .refine(
+      (v) => v === "" || /^[a-zA-Z0-9_]{1,15}$/.test(v),
+      "Max 15 chars, alphanumeric and underscores only.",
+    ),
+  githubHandle: z
+    .string()
+    .refine(
+      (v) => v === "" || /^[a-zA-Z0-9-]{1,39}$/.test(v),
+      "Max 39 chars, alphanumeric and hyphens only.",
+    ),
+  email: z
+    .string()
+    .refine((v) => v === "" || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), "Enter a valid email address."),
+});
 
-function validate(form: {
-  displayName: string;
-  bio: string;
-  websiteUrl: string;
-  twitterHandle: string;
-  githubHandle: string;
-  email: string;
-}): FieldErrors {
-  const errors: FieldErrors = {};
-  if (!form.displayName.trim()) errors.displayName = "Display name is required.";
-  else if (form.displayName.length > 64) errors.displayName = "Max 64 characters.";
-  if (form.bio.length > 280) errors.bio = "Max 280 characters.";
-  if (form.websiteUrl && !/^https:\/\/.+/.test(form.websiteUrl))
-    errors.websiteUrl = "Must start with https://";
-  if (form.twitterHandle && !/^[a-zA-Z0-9_]{1,15}$/.test(form.twitterHandle))
-    errors.twitterHandle = "Max 15 chars, alphanumeric and underscores only.";
-  if (form.githubHandle && !/^[a-zA-Z0-9-]{1,39}$/.test(form.githubHandle))
-    errors.githubHandle = "Max 39 chars, alphanumeric and hyphens only.";
-  if (form.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email))
-    errors.email = "Enter a valid email address.";
-  return errors;
-}
+type EditProfileFormValues = z.infer<typeof editProfileSchema>;
+
+const EMPTY_FORM: EditProfileFormValues = {
+  displayName: "",
+  bio: "",
+  websiteUrl: "",
+  twitterHandle: "",
+  githubHandle: "",
+  email: "",
+};
 
 export default function EditProfilePage() {
   const { username } = useParams<{ username: string }>();
@@ -64,16 +74,20 @@ export default function EditProfilePage() {
   const [ownershipChecked, setOwnershipChecked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [walletPrompt, setWalletPrompt] = useState<"locked" | "not-owner" | null>(null);
 
-  const [form, setForm] = useState({
-    displayName: "",
-    bio: "",
-    websiteUrl: "",
-    twitterHandle: "",
-    githubHandle: "",
-    email: "",
+  const {
+    register,
+    handleSubmit,
+    reset,
+    watch,
+    formState: { errors: fieldErrors },
+  } = useForm<EditProfileFormValues>({
+    resolver: zodResolver(editProfileSchema),
+    mode: "onChange",
+    defaultValues: EMPTY_FORM,
   });
+  const bioValue = watch("bio");
 
   const [assets, setAssets] = useState<Asset[]>([]);
   const [newAssetCode, setNewAssetCode] = useState("");
@@ -81,6 +95,8 @@ export default function EditProfilePage() {
   const [assetError, setAssetError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (ownershipChecked) return;
+
     async function init() {
       try {
         const res = await fetch(`${API_BASE_URL}/profiles/${username}`);
@@ -90,16 +106,23 @@ export default function EditProfilePage() {
         }
         const profile: ProfileData = await res.json();
 
-        const result = await getAddress().catch(() => ({ address: "", error: "Freighter not available" }));
-        const connectedAddress = "address" in result ? result.address : "";
+        const walletId = localStorage.getItem("walletId") as WalletId | null;
+        const adapter = walletId ? getWalletAdapter(walletId) : null;
+        const connectedAddress = adapter ? await adapter.connect().catch(() => "") : "";
 
-        if (!connectedAddress || connectedAddress !== profile.walletAddress) {
-          router.replace(`/profile/${username}`);
+        if (!connectedAddress) {
+          // Wallet not connected or Freighter is locked — show a prompt instead of silently redirecting
+          setWalletPrompt("locked");
+          return;
+        }
+
+        if (connectedAddress !== profile.walletAddress) {
+          setWalletPrompt("not-owner");
           return;
         }
 
         setOwnershipChecked(true);
-        setForm({
+        reset({
           displayName: profile.displayName ?? "",
           bio: profile.bio ?? "",
           websiteUrl: profile.websiteUrl ?? "",
@@ -120,21 +143,20 @@ export default function EditProfilePage() {
       }
     }
     init();
-  }, [username, router]);
-
-  function setField(field: keyof typeof form) {
-    return (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-      setForm((prev) => ({ ...prev, [field]: e.target.value }));
-      setFieldErrors((prev) => ({ ...prev, [field]: undefined }));
-    };
-  }
+  }, [username, router, ownershipChecked, reset]);
 
   function addAsset() {
     const code = newAssetCode.trim().toUpperCase();
     if (!code) { setAssetError("Asset code is required."); return; }
     if (!/^[A-Z0-9]{1,12}$/.test(code)) { setAssetError("Invalid asset code."); return; }
-    if (assets.some((a) => a.code === code)) { setAssetError("Asset already added."); return; }
-    setAssets((prev) => [...prev, { code, issuer: newAssetIssuer.trim() }]);
+    // #812: compare both code AND issuer so creators can accept multiple
+    // issuers of the same asset code (e.g. Circle USDC vs another USDC).
+    const issuerToAdd = newAssetIssuer.trim();
+    if (assets.some((a) => a.code === code && (a.issuer ?? "") === issuerToAdd)) {
+      setAssetError("This exact asset (code + issuer) is already added.");
+      return;
+    }
+    setAssets((prev) => [...prev, { code, issuer: issuerToAdd }]);
     setNewAssetCode("");
     setNewAssetIssuer("");
     setAssetError(null);
@@ -144,47 +166,42 @@ export default function EditProfilePage() {
     setAssets((prev) => prev.filter((a) => a.code !== code));
   }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const errors = validate(form);
-    if (Object.keys(errors).length > 0) {
-      setFieldErrors(errors);
-      return;
-    }
-
+  async function onSubmit(values: EditProfileFormValues) {
     setSubmitting(true);
     try {
       const profilePayload: Record<string, string | null> = {
-        displayName: form.displayName,
-        bio: form.bio || "",
-        websiteUrl: form.websiteUrl || null,
-        twitterHandle: form.twitterHandle || null,
-        githubHandle: form.githubHandle || null,
-        email: form.email || null,
+        displayName: values.displayName,
+        bio: values.bio || "",
+        websiteUrl: values.websiteUrl || null,
+        twitterHandle: values.twitterHandle || null,
+        githubHandle: values.githubHandle || null,
+        email: values.email || null,
       };
 
-      const [profileRes, assetsRes] = await Promise.all([
-        apiFetch(`${API_BASE_URL}/profiles/${username}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(profilePayload),
-        }),
-        apiFetch(`${API_BASE_URL}/profiles/${username}/assets`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            assets: assets.map((a) => ({
-              code: a.code,
-              issuer: a.issuer || null,
-            })),
-          }),
-        }),
-      ]);
+      // #813: Send requests sequentially so a failure in the profile PATCH
+      // prevents the assets PATCH from firing — avoids partial/inconsistent state.
+      const profileRes = await apiFetch(`${API_BASE_URL}/profiles/${username}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(profilePayload),
+      });
 
       if (!profileRes.ok) {
         const json = await profileRes.json().catch(() => ({})) as Record<string, unknown>;
         throw new Error(typeof json.error === "string" ? json.error : "Failed to save profile.");
       }
+
+      const assetsRes = await apiFetch(`${API_BASE_URL}/profiles/${username}/assets`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assets: assets.map((a) => ({
+            code: a.code,
+            issuer: a.issuer || null,
+          })),
+        }),
+      });
+
       if (!assetsRes.ok) {
         const json = await assetsRes.json().catch(() => ({})) as Record<string, unknown>;
         throw new Error(typeof json.error === "string" ? json.error : "Failed to save assets.");
@@ -204,6 +221,55 @@ export default function EditProfilePage() {
       <AppShell>
         <div className="flex h-[60vh] items-center justify-center">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-mint border-t-transparent" />
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (walletPrompt === "locked") {
+    return (
+      <AppShell>
+        <div className="flex h-[60vh] flex-col items-center justify-center gap-4 text-center px-4">
+          <div className="rounded-full bg-yellow-500/10 p-4 text-3xl">🔒</div>
+          <h2 className="text-xl font-bold text-white">Connect your wallet to edit this profile</h2>
+            <p className="text-sm text-steel max-w-sm">
+              Your wallet is not connected or is locked. Unlock your wallet and try again.
+            </p>
+          <button
+            type="button"
+            onClick={() => {
+              setLoading(true);
+              setWalletPrompt(null);
+              // Re-run the init flow by resetting ownershipChecked
+              setOwnershipChecked(false);
+            }}
+            className="min-h-[44px] rounded-xl bg-mint px-6 text-sm font-bold text-ink hover:bg-mint/90 transition-colors"
+          >
+            Try again
+          </button>
+          <Link href={`/profile/${username}`} className="text-sm text-steel hover:text-white transition-colors">
+            ← Back to profile
+          </Link>
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (walletPrompt === "not-owner") {
+    return (
+      <AppShell>
+        <div className="flex h-[60vh] flex-col items-center justify-center gap-4 text-center px-4">
+          <div className="rounded-full bg-red-500/10 p-4 text-3xl">🚫</div>
+          <h2 className="text-xl font-bold text-white">Access denied</h2>
+          <p className="text-sm text-steel max-w-sm">
+            The connected wallet does not match this profile. Switch to the correct wallet in Freighter and try again.
+          </p>
+          <Link
+            href={`/profile/${username}`}
+            className="min-h-[44px] inline-flex items-center rounded-xl bg-white/10 px-6 text-sm font-bold text-white hover:bg-white/20 transition-colors"
+          >
+            ← Back to profile
+          </Link>
         </div>
       </AppShell>
     );
@@ -233,7 +299,7 @@ export default function EditProfilePage() {
           </Link>
         </div>
 
-        <form onSubmit={handleSubmit} noValidate className="space-y-8">
+        <form onSubmit={handleSubmit(onSubmit)} noValidate className="space-y-8">
           {/* Profile fields */}
           <section className="rounded-3xl border border-white/10 bg-white/[0.02] p-6 space-y-5">
             <h2 className="text-xs font-semibold uppercase tracking-widest text-steel">
@@ -243,69 +309,63 @@ export default function EditProfilePage() {
             <Field
               label="Display Name"
               required
-              error={fieldErrors.displayName}
+              error={fieldErrors.displayName?.message}
             >
               <input
                 type="text"
-                value={form.displayName}
-                onChange={setField("displayName")}
+                {...register("displayName")}
                 maxLength={64}
                 className={inputCls(!!fieldErrors.displayName)}
                 placeholder="Your name"
               />
             </Field>
 
-            <Field label="Bio" error={fieldErrors.bio}>
+            <Field label="Bio" error={fieldErrors.bio?.message}>
               <textarea
-                value={form.bio}
-                onChange={setField("bio")}
+                {...register("bio")}
                 maxLength={280}
                 rows={3}
                 className={inputCls(!!fieldErrors.bio)}
                 placeholder="Tell supporters about yourself (max 280 chars)"
               />
               <p className="mt-1 text-right text-[10px] text-steel">
-                {form.bio.length}/280
+                {bioValue.length}/280
               </p>
             </Field>
 
-            <Field label="Website URL" error={fieldErrors.websiteUrl}>
+            <Field label="Website URL" error={fieldErrors.websiteUrl?.message}>
               <input
                 type="url"
-                value={form.websiteUrl}
-                onChange={setField("websiteUrl")}
+                {...register("websiteUrl")}
                 className={inputCls(!!fieldErrors.websiteUrl)}
                 placeholder="https://yoursite.com"
               />
             </Field>
 
-            <Field label="Twitter Handle" error={fieldErrors.twitterHandle}>
+            <Field label="Twitter Handle" error={fieldErrors.twitterHandle?.message}>
               <input
                 type="text"
-                value={form.twitterHandle}
-                onChange={setField("twitterHandle")}
+                {...register("twitterHandle")}
                 maxLength={15}
                 className={inputCls(!!fieldErrors.twitterHandle)}
                 placeholder="username (no @)"
               />
             </Field>
 
-            <Field label="GitHub Handle" error={fieldErrors.githubHandle}>
+            <Field label="GitHub Handle" error={fieldErrors.githubHandle?.message}>
               <input
                 type="text"
-                value={form.githubHandle}
-                onChange={setField("githubHandle")}
+                {...register("githubHandle")}
                 maxLength={39}
                 className={inputCls(!!fieldErrors.githubHandle)}
                 placeholder="username"
               />
             </Field>
 
-            <Field label="Email" error={fieldErrors.email}>
+            <Field label="Email" error={fieldErrors.email?.message}>
               <input
                 type="email"
-                value={form.email}
-                onChange={setField("email")}
+                {...register("email")}
                 className={inputCls(!!fieldErrors.email)}
                 placeholder="you@example.com"
               />

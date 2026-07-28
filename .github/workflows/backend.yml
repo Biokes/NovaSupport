@@ -45,18 +45,16 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.x
+          node-version: 22.x
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
       - name: Install backend dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Generate Prisma client
         run: npm run db:generate
@@ -103,3 +101,12 @@ jobs:
 
       - name: Build backend
         run: npm run build
+
+      - name: Upload source maps to Sentry
+        if: github.ref == 'refs/heads/main'
+        run: npx @sentry/cli releases files "$SENTRY_RELEASE" upload-sourcemaps ./dist
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: novasupport
+          SENTRY_PROJECT: novasupport-backend
+          SENTRY_RELEASE: ${{ github.sha }}

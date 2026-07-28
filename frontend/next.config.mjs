@@ -1,5 +1,22 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        // Wildcard subdomain — matches any Supabase project's Storage host,
+        // since the project ref (NEXT_PUBLIC_SUPABASE_URL) differs per deployment.
+        hostname: "**.supabase.co",
+        pathname: "/storage/v1/object/**",
+      },
+      {
+        // avatarUrl can also come from GitHub profile import (backend/src/app.ts
+        // ghData.avatarUrl), which next/image also needs allowlisted.
+        protocol: "https",
+        hostname: "avatars.githubusercontent.com",
+      },
+    ],
+  },
   webpack: (config, { isServer }) => {
     if (!isServer) {
       config.resolve.fallback = {
@@ -14,29 +31,19 @@ const nextConfig = {
   async headers() {
     return [
       {
-        // Security headers for all pages
-        source: "/:path*",
-        headers: [
-          {
-            key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              "script-src 'self' 'unsafe-eval'", // unsafe-eval needed for Next.js, but unsafe-inline removed for XSS protection
-              "style-src 'self' 'unsafe-inline'", // unsafe-inline still needed for styled-components/CSS-in-JS
-              "img-src 'self' data: https:",
-              "font-src 'self' data:",
-              "connect-src 'self' https:",
-              "frame-ancestors 'self'",
-            ].join("; "),
-          },
-        ],
+        // Deny framing on all non-embed routes to mitigate clickjacking
+        // Content-Security-Policy is set in middleware.ts instead of here:
+        // process.env is only resolved at build time in next.config.mjs,
+        // which bakes in an empty connect-src on hosts where these vars
+        // are injected at runtime rather than build time.
+        source: "/((?!embed).*)",
+        headers: [{ key: "X-Frame-Options", value: "DENY" }],
       },
       {
         // Allow cross-origin embedding of the embed widget pages
         source: "/embed/:path*",
         headers: [
           { key: "Access-Control-Allow-Origin", value: "*" },
-          { key: "X-Frame-Options", value: "ALLOWALL" },
           { key: "Content-Security-Policy", value: "frame-ancestors *" },
         ],
       },

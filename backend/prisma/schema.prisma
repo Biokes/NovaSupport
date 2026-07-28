@@ -31,7 +31,7 @@ model Profile {
   websiteUrl                String?
   twitterHandle             String?
   githubHandle              String?
-  walletAddress             String
+  walletAddress             String                   @unique
   ownerId                   String
   viewCount                 Int                      @default(0)
   createdAt                 DateTime                 @default(now())
@@ -44,6 +44,7 @@ model Profile {
   milestones                Milestone[]
   webhooks                  Webhook[]
   notificationPreferences   NotificationPreferences?
+  reports                   ProfileReport[]
 
   @@index([createdAt(sort: Desc)])
   @@index([ownerId])
@@ -178,6 +179,7 @@ model RecurringSupport {
   profileId        String
   amount           Decimal                     @db.Decimal(18, 7)
   assetCode        String                      @default("XLM")
+  assetIssuer      String?
   frequency        String
   nextRunAt        DateTime                    @default(now())
   status           String                      @default("active")
@@ -241,6 +243,15 @@ model AuthChallenge {
   @@map("auth_challenges")
 }
 
+model RevokedToken {
+  jti       String   @id
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@map("revoked_tokens")
+}
+
 model CircuitBreakerState {
   name          String    @id
   state         String
@@ -250,4 +261,20 @@ model CircuitBreakerState {
   createdAt     DateTime  @default(now())
 
   @@map("circuit_breaker_states")
+}
+
+model ProfileReport {
+  id         String   @id @default(cuid())
+  profileId  String
+  reason     String
+  details    String?
+  reporterIp String?
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+  profile    Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@index([profileId, createdAt(sort: Desc)])
+  @@index([expiresAt])
+  @@map("profile_reports")
 }

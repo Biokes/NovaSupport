@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { WalletConnect } from "@/components/wallet-connect";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { getNetworkLabel } from "@/lib/stellar";
@@ -129,6 +130,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Link href="/create" className="hover:text-white transition">
                   Create draft
                 </Link>
+                <Link href="/recurring" className="hover:text-white transition">
+                  Recurring support
+                </Link>
+                <Link href="/settings" className="hover:text-white transition">
+                  Settings
+                </Link>
               </nav>
               <ThemeToggle />
             </div>
@@ -161,9 +168,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                         className="flex items-center gap-3 px-4 py-3 hover:bg-white/5 dark:hover:bg-white/10 transition border-b border-white/5 dark:border-white/10 last:border-0"
                       >
                         {result.avatarUrl ? (
-                          <img
+                          <Image
                             src={result.avatarUrl}
                             alt={result.displayName}
+                            width={40}
+                            height={40}
                             className="h-10 w-10 rounded-full object-cover"
                           />
                         ) : (
