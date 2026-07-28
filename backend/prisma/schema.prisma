@@ -269,11 +269,13 @@ model ProfileReport {
   profileId  String
   reason     String
   details    String?
-  reporterIp String
+  reporterIp String?
   createdAt  DateTime @default(now())
+  expiresAt  DateTime
   profile    Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
   @@index([profileId])
   @@index([profileId, createdAt(sort: Desc)])
+  @@index([expiresAt])
   @@map("profile_reports")
 }
