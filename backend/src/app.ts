@@ -4241,7 +4241,8 @@ All errors return JSON with an \`error\` field and optional \`code\`:
           hasMore: offset + limit < totalCount,
         },
       });
-    } catch {
+    } catch (err) {
+      req.log.error({ err }, "failed to fetch supporter history");
       return sendError(res, 500, "Internal server error");
     }
   });
