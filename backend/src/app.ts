@@ -1492,7 +1492,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 
       const totalTransactions = assetGroups.reduce((acc: number, g: any) => acc + g._count, 0);
 
-      const totalByAsset = assetGroups.map((g: any) => ({
+      const assetTotals = assetGroups.map((g: any) => ({
         assetCode: g.assetCode,
         assetIssuer: g.assetIssuer,
         total: g._sum.amount ? g._sum.amount.toFixed(7) : "0.0000000",
@@ -1501,7 +1501,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       res.json({
         totalTransactions,
         uniqueSupporters: uniqueSupportersList.length,
-        totalByAsset,
+        assetTotals,
         firstSupportedAt: aggregates._min.createdAt ? aggregates._min.createdAt.toISOString() : null,
         lastSupportedAt: aggregates._max.createdAt ? aggregates._max.createdAt.toISOString() : null,
       });
