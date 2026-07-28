@@ -5,7 +5,7 @@ import { Metrics } from "../metrics.js";
 
 const DRIP_BATCH_SIZE = 100;
 
-function addMonths(date: Date, months: number): Date {
+export function addMonths(date: Date, months: number): Date {
   const result = new Date(date);
   const targetMonth = result.getMonth() + months;
   result.setMonth(targetMonth);
@@ -18,8 +18,7 @@ function addMonths(date: Date, months: number): Date {
   return result;
 }
 
-export async function processDueRecurringSupports(prismaClient = prisma) {
-  const now = new Date();
+export async function processDueRecurringSupports(prismaClient = prisma, now = new Date()) {
   let cursor: string | undefined;
 
   do {
@@ -57,29 +56,34 @@ export async function processDueRecurringSupports(prismaClient = prisma) {
       // Calculate nextRunAt based on frequency
       const nextRunAt =
         support.frequency === "weekly"
-          ? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
-          : addMonths(now, 1);
+          ? new Date(support.nextRunAt.getTime() + 7 * 24 * 60 * 60 * 1000)
+          : addMonths(support.nextRunAt, 1);
 
-      await prismaClient.$transaction(async (tx: any) => {
-        // Create the pending RecurringSupportExecution
-        await tx.recurringSupportExecution.create({
-          data: {
-            recurringSupportId: support.id,
-            status: "pending",
-          },
-        });
+      // Atomic claim: only one scheduler instance wins the row
+      const claimed = await prismaClient.$executeRaw`
+        UPDATE "RecurringSupport"
+        SET "nextRunAt" = ${nextRunAt}
+        WHERE id = ${support.id} AND "nextRunAt" <= ${now}
+      `;
 
-        // Update the RecurringSupport
-        await tx.recurringSupport.update({
-          where: { id: support.id },
-          data: { nextRunAt },
-        });
+      if (claimed === 0) {
+        logger.info({ dripId: support.id }, "Recurring support already claimed by another process");
+        continue;
+      }
+
+      await prismaClient.recurringSupportExecution.create({
+        data: {
+          recurringSupportId: support.id,
+          status: "pending",
+        },
       });
 
       logger.info({
         dripId: support.id,
         profileId: support.profileId,
         amount: support.amount.toString(),
+        assetCode: support.assetCode,
+        assetIssuer: support.assetIssuer,
       }, "Processed due recurring support");
       Metrics.dripsProcessed();
 

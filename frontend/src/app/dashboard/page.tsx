@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { Toast } from "@/components/toast";
+import { OnboardingChecklist } from "@/components/onboarding-checklist";
 import { 
   TrendingUp, Users, Wallet, Activity, 
   ArrowUpRight, ArrowDownRight, Plus, Edit2, Trash2, X, Link2, Eye, EyeOff, Copy, Check, ChevronDown, ChevronRight, Download
@@ -12,8 +13,7 @@ import {
 import { motion } from "framer-motion";
 import { formatRateLimitedMessage, parseRateLimitInfo } from "@/lib/rate-limit";
 import { apiFetch } from "@/lib/api-client";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000";
+import { API_BASE_URL } from "@/lib/config";
 
 interface Stats {
   totalEarned: number;
@@ -101,9 +101,9 @@ export default function DashboardPage() {
         setUsername(storedUsername);
 
         const [statsRes, milestonesRes, webhooksRes] = await Promise.all([
-          fetch(`${API_BASE_URL}/profiles/${storedUsername}/stats`),
-          fetch(`${API_BASE_URL}/profiles/${storedUsername}/milestones`),
-          fetch(`${API_BASE_URL}/profiles/${storedUsername}/webhooks`),
+          apiFetch(`${API_BASE_URL}/profiles/${storedUsername}/stats`),
+          apiFetch(`${API_BASE_URL}/profiles/${storedUsername}/milestones`),
+          apiFetch(`${API_BASE_URL}/profiles/${storedUsername}/webhooks`),
         ]);
 
         if (statsRes.ok) {
@@ -141,7 +141,7 @@ export default function DashboardPage() {
         ? `${API_BASE_URL}/profiles/${username}/milestones/${editingMilestone.id}`
         : `${API_BASE_URL}/profiles/${username}/milestones`;
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -193,7 +193,7 @@ export default function DashboardPage() {
     if (!username) return;
 
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_BASE_URL}/profiles/${username}/milestones/${milestoneId}`,
         { method: "DELETE" }
       );
@@ -225,7 +225,7 @@ export default function DashboardPage() {
 
     setWebhookSubmitting(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/profiles/${username}/webhooks`, {
+      const res = await apiFetch(`${API_BASE_URL}/profiles/${username}/webhooks`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: webhookUrl }),
@@ -249,7 +249,7 @@ export default function DashboardPage() {
     if (!username) return;
 
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_BASE_URL}/profiles/${username}/webhooks/${webhookId}`,
         { method: "DELETE" }
       );
@@ -273,7 +273,7 @@ export default function DashboardPage() {
     if (!deliveries[webhookId]) {
       setDeliveriesLoading(webhookId);
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${API_BASE_URL}/profiles/${username}/webhooks/${webhookId}/deliveries`
         );
         if (res.ok) {
@@ -392,6 +392,10 @@ export default function DashboardPage() {
             )}
           </div>
         </header>
+
+        {username && (
+          <OnboardingChecklist username={username} milestoneCount={milestones.length} />
+        )}
 
         {/* Summary Cards */}
         {stats && (
@@ -558,6 +562,7 @@ export default function DashboardPage() {
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleEditMilestone(milestone)}
+                          aria-label={`Edit milestone: ${milestone.title}`}
                           className="min-h-[44px] min-w-[44px] rounded-lg bg-white/5 p-2 text-steel hover:bg-white/10 transition-colors"
                           title="Edit"
                         >
@@ -565,6 +570,7 @@ export default function DashboardPage() {
                         </button>
                         <button
                           onClick={() => setDeleteConfirm(milestone.id)}
+                          aria-label={`Delete milestone: ${milestone.title}`}
                           className="min-h-[44px] min-w-[44px] rounded-lg bg-white/5 p-2 text-red-400 hover:bg-red-500/10 transition-colors"
                           title="Delete"
                         >
@@ -748,6 +754,7 @@ export default function DashboardPage() {
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleToggleDeliveries(webhook.id)}
+                          aria-label={expandedDeliveries === webhook.id ? "Hide webhook deliveries" : "View webhook deliveries"}
                           className="rounded-lg bg-white/5 p-2 text-steel hover:bg-white/10 transition-colors"
                           title="View deliveries"
                         >
@@ -755,6 +762,7 @@ export default function DashboardPage() {
                         </button>
                         <button
                           onClick={() => setWebhookDeleteConfirm(webhook.id)}
+                          aria-label={`Delete webhook for ${webhook.url}`}
                           className="rounded-lg bg-white/5 p-2 text-red-400 hover:bg-red-500/10 transition-colors"
                           title="Delete"
                         >

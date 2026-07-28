@@ -19,11 +19,11 @@ function profileLockKey(profileId: string): bigint {
   return h;
 }
 
-export async function checkAndAwardBadges(profileId: string): Promise<void> {
+export async function checkAndAwardBadges(profileId: string, prismaClient = prisma): Promise<void> {
   const lockKey = profileLockKey(profileId);
 
   try {
-    await prisma.$transaction(async (tx) => {
+    await prismaClient.$transaction(async (tx) => {
       // Serialize concurrent badge checks for the same profile using a
       // transaction-scoped advisory lock. Concurrent callers block until the
       // current check commits, then each runs with the latest DB state rather
@@ -51,7 +51,7 @@ export async function checkAndAwardBadges(profileId: string): Promise<void> {
           select: { supporterAddress: true },
         }),
         tx.supportTransaction.groupBy({
-          by: ["assetCode"],
+          by: ["assetCode", "assetIssuer"],
           where: { profileId, status: { not: "failed" } },
           _sum: { amount: true },
         }),
@@ -61,7 +61,7 @@ export async function checkAndAwardBadges(profileId: string): Promise<void> {
       ]);
 
       const xlmTotal = totalsByAsset
-        .filter((g) => g.assetCode === "XLM")
+        .filter((g) => g.assetCode === "XLM" && g.assetIssuer === null)
         .reduce((sum, g) => sum + Number(g._sum.amount ?? 0), 0);
 
       for (const badge of badges) {
@@ -81,6 +81,12 @@ export async function checkAndAwardBadges(profileId: string): Promise<void> {
             break;
           case "milestone_reached":
             shouldAward = milestonesReached >= 1;
+            break;
+          default:
+            logger.warn(
+              { criteria: badge.criteria, badgeId: badge.id },
+              "Unknown badge criteria — badge will never be auto-awarded",
+            );
             break;
         }
 

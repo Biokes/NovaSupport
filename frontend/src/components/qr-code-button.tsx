@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import FocusTrap from "focus-trap-react";
 import { QRCodeSVG } from "qrcode.react";
 import { QrCode, X, Download, Copy, Check } from "lucide-react";
 import { SITE_URL } from "@/lib/config";
@@ -99,51 +100,58 @@ export function QRCodeButton({ username }: QRCodeButtonProps) {
             className="fixed inset-0 z-40 bg-black/60 sm:hidden"
             onClick={() => setOpen(false)}
           />
-          <div
-            ref={popoverRef}
-            role="dialog"
-            aria-modal="true"
-            aria-label="Profile QR code"
-            className="absolute left-1/2 top-full z-50 mt-2 w-[260px] -translate-x-1/2 rounded-2xl border border-white/10 bg-[#0A0A0B] p-5 shadow-2xl sm:left-0 sm:translate-x-0"
+          <FocusTrap
+            focusTrapOptions={{
+              escapeDeactivates: false, // Escape is handled by the keydown listener above
+              allowOutsideClick: true,
+            }}
           >
-            <div className="mb-3 flex items-center justify-between gap-6">
-              <p className="text-xs font-semibold uppercase tracking-widest text-steel">
-                Scan to support
+            <div
+              ref={popoverRef}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Profile QR code"
+              className="absolute left-1/2 top-full z-50 mt-2 w-[260px] -translate-x-1/2 rounded-2xl border border-white/10 bg-[#0A0A0B] p-5 shadow-2xl sm:left-0 sm:translate-x-0"
+            >
+              <div className="mb-3 flex items-center justify-between gap-6">
+                <p className="text-xs font-semibold uppercase tracking-widest text-steel">
+                  Scan to support
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  aria-label="Close QR code"
+                  className="rounded-lg p-1 text-steel transition hover:text-white"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div ref={qrRef} className="flex justify-center rounded-xl bg-white p-3">
+                <QRCodeSVG value={profileUrl} size={180} />
+              </div>
+              <p className="mt-3 break-all text-center text-[10px] text-steel">
+                {profileUrl}
               </p>
-              <button
-                type="button"
-                onClick={() => setOpen(false)}
-                aria-label="Close QR code"
-                className="rounded-lg p-1 text-steel transition hover:text-white"
-              >
-                <X size={14} />
-              </button>
+              <div className="mt-4 flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleDownload}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10"
+                >
+                  <Download size={12} />
+                  Download
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyUrl}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10"
+                >
+                  {copied ? <Check size={12} /> : <Copy size={12} />}
+                  {copied ? "Copied" : "Copy URL"}
+                </button>
+              </div>
             </div>
-            <div ref={qrRef} className="flex justify-center rounded-xl bg-white p-3">
-              <QRCodeSVG value={profileUrl} size={180} />
-            </div>
-            <p className="mt-3 break-all text-center text-[10px] text-steel">
-              {profileUrl}
-            </p>
-            <div className="mt-4 flex gap-2">
-              <button
-                type="button"
-                onClick={handleDownload}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10"
-              >
-                <Download size={12} />
-                Download
-              </button>
-              <button
-                type="button"
-                onClick={handleCopyUrl}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-white transition hover:bg-white/10"
-              >
-                {copied ? <Check size={12} /> : <Copy size={12} />}
-                {copied ? "Copied" : "Copy URL"}
-              </button>
-            </div>
-          </div>
+          </FocusTrap>
         </>
       )}
     </div>

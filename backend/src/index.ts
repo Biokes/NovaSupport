@@ -1,3 +1,5 @@
+// tracing.ts must be the very first import so OTel patches all subsequent modules
+import "./tracing.js";
 import "dotenv/config";
 import * as Sentry from "@sentry/node";
 import { logger } from "./logger.js";
@@ -84,6 +86,10 @@ if (!startupConfig.supabase.enabled) {
   );
 }
 
+if (!process.env.ADMIN_WALLET_ADDRESS) {
+  logger.warn("ADMIN_WALLET_ADDRESS is not set — admin endpoints are disabled");
+}
+
 if (startupConfig.horizonUrl.includes("testnet")) {
   logger.warn(
     { horizonUrl: startupConfig.horizonUrl },
@@ -103,7 +109,9 @@ import { startWebhookProcessor } from "./services/webhook-processor.js";
 import { EventIndexer } from "./services/event-indexer.js";
 import { createSorobanRpcClient } from "./services/soroban-rpc-client.js";
 import { startWeeklyDigestScheduler, stopWeeklyDigestScheduler } from "./services/weekly-digest.js";
+import { startIpRetentionPurgeScheduler, stopIpRetentionPurgeScheduler } from "./services/ip-retention-purge.js";
 import { prisma } from "./db.js";
+import { connectRedis, disconnectRedis } from "./services/redis.js";
 
 const port = Number(process.env.PORT ?? 4000);
 const indexerNetwork = process.env.INDEXER_NETWORK ?? "TESTNET";
@@ -137,6 +145,8 @@ let dripScheduler: ReturnType<typeof startDripScheduler> | null = null;
 let webhookProcessor: ReturnType<typeof startWebhookProcessor> | null = null;
 let shuttingDown = false;
 
+await connectRedis();
+
 const server = app.listen(port, () => {
   logger.info({ port }, `NovaSupport backend listening on http://localhost:${port}`);
 
@@ -145,6 +155,9 @@ const server = app.listen(port, () => {
 
   // Start the weekly digest email scheduler
   startWeeklyDigestScheduler();
+
+  // Start the reporter IP retention purge scheduler
+  startIpRetentionPurgeScheduler();
 
   // Start the webhook delivery processor
   webhookProcessor = startWebhookProcessor();
@@ -174,6 +187,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       webhookProcessor?.stop(),
       eventIndexer?.stop(),
       Promise.resolve().then(() => stopWeeklyDigestScheduler()),
+      Promise.resolve().then(() => stopIpRetentionPurgeScheduler()),
     ]);
 
     await new Promise<void>((resolve, reject) => {
@@ -184,6 +198,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     });
 
     await prisma.$disconnect();
+    await disconnectRedis();
     await Sentry.close(2_000);
     logger.info({ signal }, "Graceful shutdown complete");
     process.exit(signal === "SIGINT" ? 130 : 143);

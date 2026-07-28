@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { SITE_URL } from "@/lib/config";
+import { Providers } from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -7,6 +8,9 @@ export const metadata: Metadata = {
   title: "NovaSupport",
   description:
     "Stellar-native support profiles for maintainers, creators, and developers.",
+  // #774: PWA manifest and theme color
+  manifest: "/manifest.json",
+  themeColor: "#00e5be",
   openGraph: {
     title: "NovaSupport",
     description:
@@ -44,7 +48,9 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body>{children}</body>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

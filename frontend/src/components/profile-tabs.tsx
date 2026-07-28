@@ -10,8 +10,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { EmptyState } from "./empty-state";
 import { stellarExpertUrl } from "@/lib/stellar";
 import { useRouter } from "next/navigation";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000";
+import { API_BASE_URL } from "@/lib/config";
 
 type Transaction = {
   id: string;

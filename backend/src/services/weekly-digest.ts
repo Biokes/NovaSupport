@@ -82,13 +82,30 @@ export async function sendWeeklyDigests(prismaClient = prisma) {
         if (txCount === 0) continue;
 
         const assetBreakdown = assetGroups
-          .map((g) => `${g._sum.amount?.toFixed(7) ?? "0"} ${g.assetCode}`)
+          .map((g) => `${g._sum.amount?.toString() ?? "0"} ${g.assetCode}`)
           .join(", ");
 
         const milestonesSection =
           milestonesCount > 0
             ? `<p><strong>Milestones reached:</strong> ${milestonesCount}</p>`
             : "";
+
+        const milestonesTextLine =
+          milestonesCount > 0
+            ? `\nMilestones reached this week: ${milestonesCount}`
+            : "";
+
+        const text =
+          `Your Weekly NovaSupport Recap\n\n` +
+          `Profile: ${profile.displayName}\n` +
+          `Total received: ${assetBreakdown}\n` +
+          `Transactions: ${txCount}\n` +
+          `New supporters: ${supporterCount}` +
+          milestonesTextLine +
+          `\n\nView your profile: https://novasupport.xyz/${profile.username}\n\n` +
+          `Thanks,\nThe NovaSupport Team\n\n` +
+          `To stop receiving these emails, update your notification preferences:\n` +
+          `https://novasupport.xyz/dashboard?settings=notifications`;
 
         const html = `
         <h2>Your Weekly NovaSupport Recap</h2>
@@ -103,11 +120,17 @@ export async function sendWeeklyDigests(prismaClient = prisma) {
         <p><a href="https://novasupport.xyz/${profile.username}">View your profile</a></p>
         <br/>
         <p>Thanks,<br/>The NovaSupport Team</p>
+        <br/>
+        <p style="font-size:12px;color:#666">
+          <a href="https://novasupport.xyz/dashboard?settings=notifications">Unsubscribe</a>
+          from weekly emails
+        </p>
       `;
 
         await sendEmail({
           to: profile.email!,
           subject: "Your NovaSupport weekly recap",
+          text,
           html,
         });
 

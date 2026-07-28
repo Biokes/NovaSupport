@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import {
   getAvailableWallets,
   getWalletAdapter,
@@ -20,6 +21,7 @@ type WalletConnectProps = {
 };
 
 export function WalletConnect({ onConnect }: WalletConnectProps = {}) {
+  const router = useRouter();
   const [address, setAddress] = useState<string | null>(null);
   const [activeWallet, setActiveWallet] = useState<WalletId | null>(null);
   const [available, setAvailable] = useState<WalletAdapter[]>([]);
@@ -59,6 +61,12 @@ export function WalletConnect({ onConnect }: WalletConnectProps = {}) {
       setActiveWallet(walletId);
       setStatus(`${adapter.name} connected`);
       onConnect?.(pubkey);
+
+      const redirectPath = localStorage.getItem("redirectAfterLogin");
+      if (redirectPath) {
+        localStorage.removeItem("redirectAfterLogin");
+        router.replace(redirectPath);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : `Failed to connect ${adapter.name}.`;
       setError(msg);
