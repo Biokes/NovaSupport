@@ -6,6 +6,7 @@ const analyticsCache = new Map<
   { data: any; timestamp: number }
 >();
 const CACHE_TTL = 3600000; // 1 hour
+const CACHE_MAX_SIZE = 1000; // Maximum number of cache entries
 
 interface DailyContribution {
   date: string;
@@ -171,10 +172,11 @@ export async function getAnalytics(
   const totalContributors = new Set(
     transactions.map((tx) => tx.supporterAddress)
   ).size;
+  // Calculate average daily contribution based on days with activity, not total calendar days
+  const activeDays = filledData.filter((d) => d.count > 0).length;
   const avgDailyContribution = (
-    filledData.length > 0
-      ? filledData.reduce((sum, d) => sum + Number(d.amount), 0) /
-        filledData.length
+    activeDays > 0
+      ? filledData.reduce((sum, d) => sum + Number(d.amount), 0) / activeDays
       : 0
   ).toString();
 
@@ -208,6 +210,14 @@ export async function getAnalytics(
   };
 
   analyticsCache.set(cacheKey, { data: result, timestamp: Date.now() });
+
+  // Evict oldest entries if cache exceeds maximum size
+  // Delete 20% of entries when limit is exceeded to reduce eviction frequency
+  if (analyticsCache.size > CACHE_MAX_SIZE) {
+    const entriesToDelete = Math.ceil(CACHE_MAX_SIZE * 0.2);
+    const keysToDelete = Array.from(analyticsCache.keys()).slice(0, entriesToDelete);
+    keysToDelete.forEach((key) => analyticsCache.delete(key));
+  }
 
   if (format === "csv") {
     return convertToCSV(result);

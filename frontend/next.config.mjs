@@ -14,6 +14,24 @@ const nextConfig = {
   async headers() {
     return [
       {
+        // Security headers for all pages
+        source: "/:path*",
+        headers: [
+          {
+            key: "Content-Security-Policy",
+            value: [
+              "default-src 'self'",
+              "script-src 'self' 'unsafe-eval'", // unsafe-eval needed for Next.js, but unsafe-inline removed for XSS protection
+              "style-src 'self' 'unsafe-inline'", // unsafe-inline still needed for styled-components/CSS-in-JS
+              "img-src 'self' data: https:",
+              "font-src 'self' data:",
+              "connect-src 'self' https:",
+              "frame-ancestors 'self'",
+            ].join("; "),
+          },
+        ],
+      },
+      {
         // Allow cross-origin embedding of the embed widget pages
         source: "/embed/:path*",
         headers: [
