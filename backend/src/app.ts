@@ -3703,7 +3703,17 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         return sendError(res, 400, "No file attached — include an 'avatar' field in the multipart body");
       }
 
-      const path = `avatars/${username}`;
+      // Delete old avatar to prevent orphaned files
+      const listResult = await supabaseClient.storage.from(bucket).list(`avatars/${username}`);
+      if (listResult.data) {
+        const oldPaths = listResult.data.map((f) => `avatars/${username}/${f.name}`);
+        if (oldPaths.length > 0) {
+          await supabaseClient.storage.from(bucket).remove(oldPaths);
+        }
+      }
+
+      const version = Date.now();
+      const path = `avatars/${username}/${version}`;
       const { error: uploadError } = await supabaseClient.storage
         .from(bucket)
         .upload(path, req.file.buffer, { upsert: true });

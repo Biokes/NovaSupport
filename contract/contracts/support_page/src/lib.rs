@@ -280,6 +280,12 @@ pub fn unpause(e: Env) -> Result<(), Error> {
         if !e.storage().persistent().has(&DataKey::Admin) {
             return Err(Error::ContractNotInitialized);
         }
+
+        // Check if contract is paused
+        let paused: bool = e.storage().persistent().get(&DataKey::Paused).unwrap_or(false);
+        if paused {
+            return Err(Error::ContractPaused);
+        }
         
         // Only recipient can withdraw their funds
         if caller != recipient {
