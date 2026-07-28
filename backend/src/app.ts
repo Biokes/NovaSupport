@@ -3603,12 +3603,29 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         return res.send(createAnalyticsCsv(transactions));
       }
 
-      const analytics = await getAnalytics(profile.id, start, end, "json");
+      const [analytics, recentTransactions] = await Promise.all([
+        getAnalytics(profile.id, start, end, "json"),
+        prisma.supportTransaction.findMany({
+          where: { profileId: profile.id },
+          orderBy: { createdAt: "desc" },
+          take: 10,
+          select: {
+            id: true,
+            txHash: true,
+            amount: true,
+            assetCode: true,
+            supporterAddress: true,
+            createdAt: true,
+            status: true,
+            message: true,
+          },
+        }),
+      ]);
 
       res.json({
         profile: { username: profile.username, displayName: profile.displayName },
         ...analytics,
-        recentTransactions: analytics.dailyContributions, // For backward compatibility or adjustment
+        recentTransactions,
       });
     } catch (err) {
       req.log.error({ err }, "failed to fetch analytics");
