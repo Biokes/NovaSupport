@@ -6,7 +6,7 @@ const analyticsCache = new Map<
   { data: any; timestamp: number }
 >();
 const CACHE_TTL = 3600000; // 1 hour
-const CACHE_MAX_SIZE = 1000;
+const CACHE_MAX_SIZE = 1000; // Maximum number of cache entries
 
 interface DailyContribution {
   date: string;

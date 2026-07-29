@@ -28,7 +28,6 @@ model Profile {
   emailVerified             Boolean                  @default(false)
   emailVerificationToken    String?                  @unique
   emailVerificationExpiry   DateTime?
-  notifyOnSupport           Boolean                  @default(true)
   websiteUrl                String?
   twitterHandle             String?
   githubHandle              String?

@@ -1800,7 +1800,6 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     bio: z.string().max(280).optional(),
     avatarUrl: z.string().url().optional().nullable(),
     email: z.string().email().optional().nullable(),
-    notifyOnSupport: z.boolean().optional(),
     websiteUrl: z.string().url().startsWith("https://").optional().nullable(),
     twitterHandle: z
       .string()
@@ -3296,9 +3295,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
           });
 
           const notifyOnSupport =
-            recipientProfile?.notificationPreferences?.notifyOnSupport ??
-            recipientProfile?.notifyOnSupport ??
-            true;
+            recipientProfile?.notificationPreferences?.notifyOnSupport ?? true;
 
           // Only send email if profile has verified email (#417)
           if (
