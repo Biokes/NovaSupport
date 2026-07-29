@@ -93,36 +93,7 @@ impl SupportPageContract {
         Ok(())
     }
 
-    // pub fn pause(e: Env) -> Result<(), Error> {
-    //     let admin: Address = e
-    //         .storage()
-    //         .persistent()
-    //         .get(&DataKey::Admin)
-    //         .ok_or(Error::ContractNotInitialized)?;
-    //     admin.require_auth();
-        
-    //     e.storage().persistent().set(&DataKey::Paused, &true);
-    //     e.storage()
-    //         .persistent()
-    //         .extend_ttl(&DataKey::Paused, LEDGERS_THRESHOLD, LEDGERS_TO_LIVE);
-    //     Ok(())
-    // }
-
-    // pub fn unpause(e: Env) -> Result<(), Error> {
-    //     let admin: Address = e
-    //         .storage()
-    //         .persistent()
-    //         .get(&DataKey::Admin)
-    //         .ok_or(Error::ContractNotInitialized)?;
-    //     admin.require_auth();
-        
-    //     e.storage().persistent().set(&DataKey::Paused, &false);
-    //     e.storage()
-    //         .persistent()
-    //         .extend_ttl(&DataKey::Paused, LEDGERS_THRESHOLD, LEDGERS_TO_LIVE);
-    //     Ok(())
-    // }
-pub fn pause(e: Env) -> Result<(), Error> {
+    pub fn pause(e: Env) -> Result<(), Error> {
     let admin: Address = e
         .storage()
         .persistent()
