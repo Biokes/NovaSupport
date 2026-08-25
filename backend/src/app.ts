@@ -2865,19 +2865,29 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     const profile = await resolveProfileOwner(req.params.username as string, req.auth, res);
     if (!profile) return;
 
-    const existingCount = await prisma.webhook.count({
-      where: { profileId: profile.id },
-    });
-    if (existingCount >= 10) {
-      return sendError(res, 422, "Maximum 10 webhooks per profile");
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        const existingCount = await tx.webhook.count({
+          where: { profileId: profile.id },
+        });
+        if (existingCount >= 10) {
+          throw new Error("MAX_WEBHOOKS_EXCEEDED");
+        }
+
+        const secret = randomBytes(32).toString("hex");
+        const webhook = await tx.webhook.create({
+          data: { url: parsed.data.url, secretHash: secret, profileId: profile.id },
+        });
+        return { webhook, secret };
+      });
+
+      return res.status(201).json({ id: result.webhook.id, url: result.webhook.url, secret: result.secret });
+    } catch (err) {
+      if (err instanceof Error && err.message === "MAX_WEBHOOKS_EXCEEDED") {
+        return sendError(res, 422, "Maximum 10 webhooks per profile");
+      }
+      throw err;
     }
-
-    const secret = randomBytes(32).toString("hex");
-    const webhook = await prisma.webhook.create({
-      data: { url: parsed.data.url, secretHash: secret, profileId: profile.id },
-    });
-
-    return res.status(201).json({ id: webhook.id, url: webhook.url, secret });
   });
 
   v1Router.get("/profiles/:username/webhooks", requireAuth, async (req, res) => {
@@ -3998,30 +4008,36 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         return sendError(res, 403, "Forbidden: You do not own this profile");
       }
 
-      const activeCount = await prisma.milestone.count({
-        where: { profileId: profile.id, status: { not: "reached" } },
-      });
-      if (activeCount >= 20) {
-        return sendError(res, 422, "Maximum 20 active milestones per profile");
-      }
-
       const parsed = createMilestoneSchema.safeParse(req.body);
       if (!parsed.success) {
         return sendError(res, 400, "Invalid request body");
       }
 
-      const milestone = await prisma.milestone.create({
-        data: {
-          title: parsed.data.title,
-          description: parsed.data.description,
-          targetAmount: parsed.data.targetAmount,
-          assetCode: parsed.data.assetCode,
-          profileId: profile.id,
-        },
+      const milestone = await prisma.$transaction(async (tx) => {
+        const activeCount = await tx.milestone.count({
+          where: { profileId: profile.id, status: { not: "reached" } },
+        });
+        if (activeCount >= 20) {
+          throw new Error("MAX_MILESTONES_EXCEEDED");
+        }
+
+        const created = await tx.milestone.create({
+          data: {
+            title: parsed.data.title,
+            description: parsed.data.description,
+            targetAmount: parsed.data.targetAmount,
+            assetCode: parsed.data.assetCode,
+            profileId: profile.id,
+          },
+        });
+        return created;
       });
 
       res.status(201).json(milestone);
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.message === "MAX_MILESTONES_EXCEEDED") {
+        return sendError(res, 422, "Maximum 20 active milestones per profile");
+      }
       return sendError(res, 500, "Internal server error");
     }
   });
