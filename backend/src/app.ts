@@ -1051,7 +1051,19 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         const profiles = await prisma.profile.findMany({
           where,
           take: 1000,
-          include: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            bio: true,
+            avatarUrl: true,
+            websiteUrl: true,
+            twitterHandle: true,
+            githubHandle: true,
+            walletAddress: true,
+            viewCount: true,
+            createdAt: true,
+            updatedAt: true,
             acceptedAssets: true,
             supportTransactions: {
               where: { status: "SUCCESS" },
@@ -1127,7 +1139,21 @@ All errors return JSON with an \`error\` field and optional \`code\`:
           take: limit,
           skip: offset,
           orderBy,
-          include: { acceptedAssets: true },
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            bio: true,
+            avatarUrl: true,
+            websiteUrl: true,
+            twitterHandle: true,
+            githubHandle: true,
+            walletAddress: true,
+            viewCount: true,
+            createdAt: true,
+            updatedAt: true,
+            acceptedAssets: true,
+          },
         }),
         prisma.profile.count({ where: combinedWhere }),
       ]);
@@ -1417,7 +1443,20 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     try {
       const profile = await prisma.profile.findUnique({
         where: { username: req.params.username as string },
-        include: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          bio: true,
+          avatarUrl: true,
+          websiteUrl: true,
+          twitterHandle: true,
+          githubHandle: true,
+          walletAddress: true,
+          ownerId: true,
+          viewCount: true,
+          createdAt: true,
+          updatedAt: true,
           acceptedAssets: true,
         },
       });
@@ -1439,11 +1478,10 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         });
       }
 
-      const responseBody: Record<string, unknown> = { ...profile };
+      const { ownerId: _, ...publicProfile } = profile;
+      const responseBody: Record<string, unknown> = { ...publicProfile };
       if (req.auth) {
-        responseBody.isOwner = Boolean(
-          isProfileOwner(req.auth, profile),
-        );
+        responseBody.isOwner = isOwner;
       }
 
       res.json(responseBody);
