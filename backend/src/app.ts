@@ -3990,6 +3990,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       .regex(/^\d+(\.\d{1,7})?$/, "Must be a positive decimal with up to 7 places")
       .refine((v) => parseFloat(v) > 0, "Must be greater than zero"),
     assetCode: z.string().default("XLM"),
+    assetIssuer: z.string().optional().nullable(),
   });
 
   v1Router.post("/profiles/:username/milestones", requireAuth, writeLimiter, async (req, res) => {
@@ -4027,6 +4028,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
             description: parsed.data.description,
             targetAmount: parsed.data.targetAmount,
             assetCode: parsed.data.assetCode,
+            assetIssuer: parsed.data.assetIssuer ?? null,
             profileId: profile.id,
           },
         });
