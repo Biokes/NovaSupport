@@ -11,39 +11,29 @@ const LEDGERS_THRESHOLD: u32 = 50_000;
 #[repr(u32)]
 pub enum Error {
     // Input validation errors (1-99)
-    InvalidAmount = 1,
     ZeroAmount = 2,
     NegativeAmount = 3,
     EmptyMessage = 4,
     MessageTooLong = 5,
     InvalidAssetCode = 6,
-    
+
     // Authorization errors (100-199)
-    Unauthorized = 100,
-    NotAdmin = 101,
     NotRecipient = 102,
-    CallerNotAuthorized = 103,
-    
+
     // Contract state errors (200-299)
     ContractPaused = 200,
     ContractNotInitialized = 201,
     AlreadyInitialized = 202,
-    
+
     // Balance and transfer errors (300-399)
     InsufficientBalance = 300,
     InsufficientContractBalance = 301,
     TransferFailed = 302,
     WithdrawAmountExceedsBalance = 303,
-    
+
     // Storage and data errors (400-499)
-    StorageError = 400,
-    DataNotFound = 401,
     RecipientNotFound = 402,
-    
-    // Asset and token errors (500-599)
-    InvalidAsset = 500,
-    AssetNotSupported = 501,
-    TokenClientError = 502,
+    ZeroBalance = 403,
 }
 
 #[derive(Clone)]
@@ -273,11 +263,16 @@ pub fn unpause(e: Env) -> Result<(), Error> {
 
         let st = e.storage().persistent();
         let key = DataKey::TotalByAsset(recipient.clone(), asset.clone());
+
+        // Distinguish a recipient the contract has never seen from a known
+        // recipient whose balance has already been withdrawn to zero.
+        if !st.has(&key) {
+            return Err(Error::RecipientNotFound);
+        }
         let balance: i128 = st.get(&key).unwrap_or(0);
 
-        // Check if recipient has any balance for this asset
         if balance == 0 {
-            return Err(Error::RecipientNotFound);
+            return Err(Error::ZeroBalance);
         }
 
         // Check if withdrawal amount exceeds available balance
@@ -843,6 +838,80 @@ mod test {
 
         // Try to withdraw without any support received
         client.withdraw(&recipient, &recipient, &asset, &1000_i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #403)")] // Error::ZeroBalance
+    fn withdraw_again_after_full_withdrawal_is_zero_balance_not_not_found() {
+        let e = Env::default();
+        e.mock_all_auths();
+        let contract_id = e.register(SupportPageContract, ());
+        let client = SupportPageContractClient::new(&e, &contract_id);
+
+        let supporter = Address::generate(&e);
+        let recipient = Address::generate(&e);
+        let admin = Address::generate(&e);
+        let asset = e
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&e, &asset);
+        token_admin.mint(&supporter, &10_000_i128);
+
+        client.initialize(&admin);
+        client.support(
+            &supporter,
+            &recipient,
+            &asset,
+            &10_000_i128,
+            &String::from_str(&e, "XLM"),
+            &String::from_str(&e, "Support"),
+        );
+
+        // Withdraw everything, then withdraw again - this recipient is known
+        // to the contract, so the second call must be ZeroBalance, not
+        // RecipientNotFound.
+        client.withdraw(&recipient, &recipient, &asset, &10_000_i128);
+        client.withdraw(&recipient, &recipient, &asset, &1_i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #301)")] // Error::InsufficientContractBalance
+    fn withdraw_fails_when_contract_token_balance_is_below_recorded_total() {
+        let e = Env::default();
+        e.mock_all_auths();
+        let contract_id = e.register(SupportPageContract, ());
+        let client = SupportPageContractClient::new(&e, &contract_id);
+
+        let supporter = Address::generate(&e);
+        let recipient = Address::generate(&e);
+        let admin = Address::generate(&e);
+        let asset = e
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&e, &asset);
+        token_admin.mint(&supporter, &10_000_i128);
+
+        client.initialize(&admin);
+        client.support(
+            &supporter,
+            &recipient,
+            &asset,
+            &1_000_i128,
+            &String::from_str(&e, "XLM"),
+            &String::from_str(&e, "Support"),
+        );
+
+        // Inflate the recorded total beyond what the contract actually
+        // holds in tokens, simulating the contract's own balance falling
+        // below a recipient's recorded total.
+        e.as_contract(&contract_id, || {
+            e.storage().persistent().set(
+                &DataKey::TotalByAsset(recipient.clone(), asset.clone()),
+                &1_000_000_i128,
+            );
+        });
+
+        client.withdraw(&recipient, &recipient, &asset, &1_000_000_i128);
     }
 
     #[test]
