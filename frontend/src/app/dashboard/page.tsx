@@ -330,8 +330,10 @@ export default function DashboardPage() {
     }
   };
 
-  const getEmbedCode = (user: string) =>
-    `<iframe\n  src="https://novasupport.xyz/embed/${user}"\n  width="400"\n  height="320"\n  frameborder="0"\n  style="border-radius:16px"\n></iframe>`;
+  const getEmbedCode = (user: string) => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return `<iframe\n  src="${origin}/embed/${user}"\n  width="400"\n  height="320"\n  frameborder="0"\n  style="border-radius:16px"\n></iframe>`;
+  };
 
   const handleCopyEmbed = async () => {
     if (!username) return;
@@ -536,10 +538,14 @@ export default function DashboardPage() {
           ) : (
             <div className="space-y-3">
               {milestones.map((milestone) => {
-                const progress = Math.min(
-                  (parseFloat(milestone.currentAmount) / parseFloat(milestone.targetAmount)) * 100,
-                  100
-                );
+                const currentAmount = parseFloat(milestone.currentAmount);
+                const targetAmount = parseFloat(milestone.targetAmount);
+                const progress =
+                  Number.isFinite(currentAmount) &&
+                  Number.isFinite(targetAmount) &&
+                  targetAmount > 0
+                    ? Math.min((currentAmount / targetAmount) * 100, 100)
+                    : 0;
 
                 return (
                   <motion.div
