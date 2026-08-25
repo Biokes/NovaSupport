@@ -10,7 +10,10 @@ type ShareButtonProps = {
 export function ShareButton({ displayName, username }: ShareButtonProps) {
   const [copied, setCopied] = useState(false);
 
-  const profileUrl = `https://novasupport.xyz/profile/${username}`;
+  const profileUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/profile/${username}`
+      : `/profile/${username}`;
 
   const handleShare = async () => {
     if (typeof navigator !== "undefined" && navigator.share) {
