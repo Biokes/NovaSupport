@@ -459,11 +459,6 @@ export function ProfileTabs({ username }: { username: string }) {
                 <p className="text-sm mt-1">Achievement badges will appear here once earned.</p>
               </div>
             )}
-            <EmptyState
-              variant="default"
-              title="Badges coming soon"
-              description="Achievement badges will appear here once earned. Start supporting creators to be eligible!"
-            />
           </motion.div>
         )}
       </AnimatePresence>

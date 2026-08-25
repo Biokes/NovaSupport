@@ -7,4 +7,7 @@ test("home page loads and renders the creator list", async ({ page }) => {
   await page.getByRole("link", { name: /explore creators/i }).click();
   await expect(page).toHaveURL(/\/explore/);
   await expect(page.getByRole("heading", { name: /explore creators/i })).toBeVisible();
+
+  const creatorCards = page.locator('a[href^="/profile/"]');
+  await expect(creatorCards.first()).toBeVisible();
 });
