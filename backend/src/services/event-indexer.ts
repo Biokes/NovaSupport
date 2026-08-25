@@ -195,6 +195,11 @@ export class EventIndexer {
             message: event.message,
             profileId,
             status: "SUCCESS",
+            // Use the on-chain event timestamp so that backfilled transactions
+            // are stamped with when they actually occurred, not when the indexer
+            // ingested them. Without this, historical backfills corrupt
+            // date-range queries, the weekly digest, and tax-year CSV exports.
+            createdAt: event.emittedAt,
           },
         });
         // Heuristic: assume createdAt == updatedAt means this was an INSERT.

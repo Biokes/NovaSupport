@@ -3261,15 +3261,34 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         invalidateProfileLeaderboardCache(supportRecord.profileId);
       } catch (error: any) {
         if (error?.code === "P2002") {
-          const existing = await prisma.supportTransaction.findUnique({
-            where: { txHash: parsed.data.txHash },
-            select: { txHash: true },
-          });
+          // Inspect meta.target to determine which unique constraint was
+          // actually violated. SupportTransaction has two independent unique
+          // constraints — txHash and recurringSupportExecutionId — and
+          // always looking up by txHash when the real conflict is on
+          // recurringSupportExecutionId would return nothing, causing the 409
+          // to report a txHash that was never stored.
+          const target: string[] = error?.meta?.target ?? [];
+          let existingTxHash: string | null = null;
+
+          if (target.includes("recurringSupportExecutionId") && parsed.data.recurringSupportExecutionId) {
+            const existing = await prisma.supportTransaction.findUnique({
+              where: { recurringSupportExecutionId: parsed.data.recurringSupportExecutionId },
+              select: { txHash: true },
+            });
+            existingTxHash = existing?.txHash ?? null;
+          } else {
+            // Default: conflict on txHash (or unknown target — fall back safely).
+            const existing = await prisma.supportTransaction.findUnique({
+              where: { txHash: parsed.data.txHash },
+              select: { txHash: true },
+            });
+            existingTxHash = existing?.txHash ?? parsed.data.txHash;
+          }
 
           return res.status(409).json({
             error: "Transaction already recorded",
             code: "DUPLICATE_TX",
-            existingTxHash: existing?.txHash ?? parsed.data.txHash,
+            existingTxHash,
           });
         }
         throw error;
