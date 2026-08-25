@@ -39,7 +39,7 @@ import { processPendingWebhookDeliveries } from "./services/webhook-processor.js
 import { getIsRedisAvailable } from "./services/redis.js";
 import { enqueueWebhookDelivery } from "./services/webhook-queue.js";
 import { addMonths } from "./services/drip-scheduler.js";
-import { sanitizeBody, sanitizeQuery } from "./middleware/sanitize.js";
+import { sanitizeBody, sanitizeQuery, sanitizeString } from "./middleware/sanitize.js";
 import { CircuitBreaker, type CircuitBreakerStorage, type State } from "./services/circuit-breaker.js";
 import {
   validateUsername,
@@ -2132,6 +2132,18 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         const { fetchGitHubProfile, mapGitHubToNovaSupport, GitHubUserNotFoundError, GitHubRateLimitError } =
           await import("./services/profile-importer.js");
         ghData = mapGitHubToNovaSupport(await fetchGitHubProfile(githubUsername, githubToken));
+
+        // GitHub-sourced fields never pass through req.body, so the global
+        // sanitizeBody middleware never runs on them — sanitize explicitly here
+        // using the same helper to avoid a stored-XSS bypass.
+        ghData.displayName = sanitizeString("displayName", ghData.displayName).result;
+        ghData.bio = sanitizeString("bio", ghData.bio).result;
+        if (ghData.websiteUrl) {
+          ghData.websiteUrl = sanitizeString("websiteUrl", ghData.websiteUrl).result || null;
+        }
+        if (ghData.twitterHandle) {
+          ghData.twitterHandle = sanitizeString("twitterHandle", ghData.twitterHandle).result || null;
+        }
 
         const updated = await prisma.profile.update({
           where: { username },
@@ -4329,6 +4341,21 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 
   // ── Recurring Support ───────────────────────────────────────────────────
 
+  // Checks that (assetCode, assetIssuer) matches one of the profile's
+  // accepted (code, issuer) pairs, not just the asset code in isolation.
+  // `issuer` is nullable (e.g. native XLM has no issuer), so null/undefined
+  // are treated as equivalent "no issuer".
+  function isAcceptedAssetPair(
+    acceptedAssets: { code: string; issuer: string | null }[],
+    assetCode: string,
+    assetIssuer: string | null | undefined,
+  ): boolean {
+    const normalizedIssuer = assetIssuer ?? null;
+    return acceptedAssets.some(
+      (a) => a.code === assetCode && (a.issuer ?? null) === normalizedIssuer,
+    );
+  }
+
   const recurringSchema = z.object({
     profileId:   z.string().min(1),
     amount:      z.string().regex(/^\d+(\.\d{1,7})?$/, "amount must be a positive decimal with up to 7 decimal places").refine(v => parseFloat(v) > 0, "amount must be greater than zero"),
@@ -4351,8 +4378,8 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     if (!profile) return sendError(res, 404, "Profile not found");
 
     const acceptedCodes = profile.acceptedAssets.map((a: { code: string }) => a.code);
-    if (acceptedCodes.length > 0 && !acceptedCodes.includes(assetCode)) {
-      return sendError(res, 400, `Asset '${assetCode}' is not accepted by this profile. Accepted: ${acceptedCodes.join(", ")}`);
+    if (acceptedCodes.length > 0 && !isAcceptedAssetPair(profile.acceptedAssets, assetCode, assetIssuer)) {
+      return sendError(res, 400, `Asset '${assetCode}'${assetIssuer ? ` (issuer ${assetIssuer})` : ""} is not accepted by this profile. Accepted: ${acceptedCodes.join(", ")}`);
     }
 
     const user = await prisma.user.findFirst({ where: { email: req.auth!.walletAddress } });
@@ -4461,6 +4488,25 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     if (subscription.supporterId !== user.id) return sendError(res, 403, "Forbidden");
 
     const { status, frequency, amount, assetIssuer } = parsed.data;
+
+    if (assetIssuer !== undefined) {
+      const profile = await prisma.profile.findUnique({
+        where: { id: subscription.profileId },
+        include: { acceptedAssets: true },
+      });
+      if (!profile) return sendError(res, 404, "Profile not found");
+
+      if (
+        profile.acceptedAssets.length > 0 &&
+        !isAcceptedAssetPair(profile.acceptedAssets, subscription.assetCode, assetIssuer)
+      ) {
+        return sendError(
+          res,
+          400,
+          `Asset '${subscription.assetCode}'${assetIssuer ? ` (issuer ${assetIssuer})` : ""} is not accepted by this profile`,
+        );
+      }
+    }
 
     // Recalculate nextRunAt when frequency changes
     let nextRunAt: Date | undefined;
