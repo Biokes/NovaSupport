@@ -12,6 +12,9 @@ export interface ExpectedTxDetails {
 const verificationCache = new Map<string, { result: boolean; timestamp: number }>();
 export const VERIFICATION_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 export const NEGATIVE_CACHE_TTL = 30 * 1000; // 30 seconds for false/error results
+// Bound the cache to prevent unbounded memory growth — one entry per unique
+// (txHash, expected) key, accumulated indefinitely otherwise (#923)
+export const VERIFICATION_CACHE_MAX_SIZE = 5000;
 
 function normalizeAmount(amount: string): string {
   return parseFloat(amount).toFixed(7);
@@ -19,6 +22,16 @@ function normalizeAmount(amount: string): string {
 
 export function clearVerificationCache(): void {
   verificationCache.clear();
+}
+
+function setCacheEntry(key: string, value: { result: boolean; timestamp: number }): void {
+  verificationCache.set(key, value);
+  // Evict the oldest entry when the cache exceeds the max size to prevent OOM
+  // (same pattern as analytics.ts) (#923)
+  if (verificationCache.size > VERIFICATION_CACHE_MAX_SIZE) {
+    const oldest = verificationCache.keys().next().value;
+    if (oldest !== undefined) verificationCache.delete(oldest);
+  }
 }
 
 function makeCacheKey(txHash: string, expected?: ExpectedTxDetails): string {
@@ -158,23 +171,23 @@ export async function verifyTransaction(
       const tx = await server.transactions().transaction(txHash).call();
 
       if (!tx.successful) {
-        verificationCache.set(cacheKey, { result: false, timestamp: Date.now() });
+        setCacheEntry(cacheKey, { result: false, timestamp: Date.now() });
         return false;
       }
 
       if (expected) {
         const valid = await validatePaymentDetails(server, txHash, expected);
         if (!valid) {
-          verificationCache.set(cacheKey, { result: false, timestamp: Date.now() });
+          setCacheEntry(cacheKey, { result: false, timestamp: Date.now() });
           return false;
         }
       }
 
-      verificationCache.set(cacheKey, { result: true, timestamp: Date.now() });
+      setCacheEntry(cacheKey, { result: true, timestamp: Date.now() });
       return true;
     } catch (e: unknown) {
       if (isHorizon404(e)) {
-        verificationCache.set(cacheKey, { result: false, timestamp: Date.now() });
+        setCacheEntry(cacheKey, { result: false, timestamp: Date.now() });
         return false;
       }
 
@@ -188,6 +201,6 @@ export async function verifyTransaction(
     }
   }
 
-  verificationCache.set(cacheKey, { result: "error" as any, timestamp: Date.now() });
+  setCacheEntry(cacheKey, { result: "error" as any, timestamp: Date.now() });
   return "error";
 }
