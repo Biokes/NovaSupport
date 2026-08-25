@@ -28,12 +28,8 @@ export function NotificationPreferences({ username }: Props) {
   const [emailVerified, setEmailVerified] = useState<boolean | null>(null);
 
   useEffect(() => {
-    const token = localStorage.getItem("authToken");
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-
+    setLoading(true);
+    setError(null);
     Promise.all([
       apiFetch(`${API_BASE_URL}/profiles/${username}/notification-preferences`),
       apiFetch(`${API_BASE_URL}/profiles/${username}`),
@@ -48,7 +44,9 @@ export function NotificationPreferences({ username }: Props) {
         if (prefsData) setPrefs(prefsData);
         if (profileData) setEmailVerified(profileData.emailVerified ?? false);
       })
-      .catch(() => {})
+      .catch(() => {
+        setError("Failed to load notification preferences");
+      })
       .finally(() => setLoading(false));
   }, [username]);
 

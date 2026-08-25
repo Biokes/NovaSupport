@@ -108,6 +108,8 @@ export function SupportPanel({
     [handleCopy],
   );
 
+  const isXlmPayment = paymentAsset.code === "XLM";
+
   const handleSend = useCallback(async () => {
     const parsedAmt = parseFloat(amount);
     const validAmount = !isNaN(parsedAmt) && parsedAmt > 0;
@@ -178,7 +180,7 @@ export function SupportPanel({
       setMessage("");
 
       if (isRecurring && profileId) {
-        await apiFetch(`${API_BASE_URL}/api/v1/recurring-support`, {
+        const recurringRes = await apiFetch(`${API_BASE_URL}/v1/recurring-support`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -188,9 +190,19 @@ export function SupportPanel({
             assetIssuer: paymentAsset.issuer || undefined,
             frequency,
           }),
-        }).catch(() => {
-          // Non-critical — recurring registration failure doesn't affect the payment.
         });
+        if (!recurringRes.ok) {
+          const body = (await recurringRes.json().catch(() => ({}))) as Record<
+            string,
+            unknown
+          >;
+          showToast(
+            typeof body.error === "string"
+              ? body.error
+              : "Payment succeeded, but recurring support could not be enabled.",
+            "error",
+          );
+        }
       }
 
       await loadBalance(visitorAddress);
@@ -211,6 +223,7 @@ export function SupportPanel({
     profileId,
     frequency,
     showToast,
+    isXlmPayment,
   ]);
 
   const loadBalance = async (address: string) => {
@@ -276,7 +289,6 @@ export function SupportPanel({
   const isValidAmount = hasValidAmount;
   const recipientAsset = { code: "XLM" };
 
-  const isXlmPayment = paymentAsset.code === "XLM";
   const xlmBalance = parseFloat(
     visitorBalances.find((b) => b.asset_type === "native")?.balance ?? "0"
   );
