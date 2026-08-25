@@ -338,9 +338,9 @@ export class EventIndexer {
           { ingested, contractId: this.contractId },
           "indexed events",
         );
-        // More pages available — re-enter immediately but yield to the event loop.
-        if (nextCursor !== null) delay = 0;
       }
+      // More pages available — re-enter immediately but yield to the event loop.
+      if (nextCursor !== null) delay = 0;
 
       await this.resolveOrphans().catch((err) => {
         Metrics.eventIndexerErrors();

@@ -163,7 +163,7 @@ pub fn unpause(e: Env) -> Result<(), Error> {
         }
 
         // Validate asset code
-        if c.len() == 0 {
+        if c.len() == 0 || c.len() > 12 {
             return Err(Error::InvalidAssetCode);
         }
 
