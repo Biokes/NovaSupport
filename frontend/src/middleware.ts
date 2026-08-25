@@ -9,7 +9,7 @@ export function middleware(request: NextRequest) {
 
   const csp = [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline'",
+    "script-src 'self'",
     "style-src 'self' 'unsafe-inline'",
     `connect-src 'self' ${process.env.NEXT_PUBLIC_API_BASE_URL ?? ""} ${process.env.NEXT_PUBLIC_HORIZON_URL ?? ""} ${process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ?? ""}`,
     "img-src 'self' data: blob: https:",
