@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { getAddress } from "@stellar/freighter-api";
+import { getWalletAdapter, type WalletId } from "@/lib/wallet-adapters";
 
 export function EditProfileButton({
   username,
@@ -14,12 +14,24 @@ export function EditProfileButton({
   const [isOwner, setIsOwner] = useState(false);
 
   useEffect(() => {
-    getAddress()
-      .then((result) => {
-        const addr = "address" in result ? result.address : "";
-        setIsOwner(Boolean(addr && addr === walletAddress));
-      })
-      .catch(() => {});
+    async function resolveConnectedWallet() {
+      try {
+        const walletId =
+          typeof window !== "undefined"
+            ? (localStorage.getItem("walletId") as WalletId | null)
+            : null;
+        const adapter = walletId ? getWalletAdapter(walletId) : undefined;
+        if (!adapter) {
+          setIsOwner(false);
+          return;
+        }
+        const address = await adapter.connect().catch(() => "");
+        setIsOwner(Boolean(address && address === walletAddress));
+      } catch {
+        setIsOwner(false);
+      }
+    }
+    resolveConnectedWallet();
   }, [walletAddress]);
 
   if (!isOwner) return null;
