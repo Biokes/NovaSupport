@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { SHARE_DONE_KEY_PREFIX } from "@/components/onboarding-checklist";
 
 type ShareButtonProps = {
   displayName: string;
@@ -15,6 +16,12 @@ export function ShareButton({ displayName, username }: ShareButtonProps) {
       ? `${window.location.origin}/profile/${username}`
       : `/profile/${username}`;
 
+  function markShared() {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(`${SHARE_DONE_KEY_PREFIX}${username}`, "true");
+    }
+  }
+
   const handleShare = async () => {
     if (typeof navigator !== "undefined" && navigator.share) {
       try {
@@ -23,6 +30,7 @@ export function ShareButton({ displayName, username }: ShareButtonProps) {
           text: `Support ${displayName} on Stellar`,
           url: profileUrl,
         });
+        markShared();
       } catch (err) {
         // User dismissed the share sheet — ignore AbortError silently
         if (err instanceof Error && err.name !== "AbortError") {
@@ -48,6 +56,7 @@ export function ShareButton({ displayName, username }: ShareButtonProps) {
       document.execCommand("copy");
       document.body.removeChild(textarea);
     }
+    markShared();
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
