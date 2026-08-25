@@ -142,13 +142,14 @@ function isHorizon404(e: unknown): boolean {
  *
  * @param server   - Horizon.Server instance to query (injectable for testing)
  * @param txHash   - Transaction hash to verify
- * @param retries  - Number of attempts before returning "error" (default 3)
+ * @param retries  - Number of attempts before throwing (default 3)
  * @param backoffMs - Base delay in ms; doubled on each retry (default 1000)
  * @param expected  - Optional payment details to validate against on-chain operations
  * @returns
  *   true    — transaction exists, is successful, and (if expected given) details match
- *   false   — transaction not found (404) or details mismatch
- *   "error" — Horizon unreachable after all retries
+ *   false   — transaction not found (404) or details mismatch (not an infrastructure failure)
+ * @throws  When Horizon is unreachable or returns non-404 errors after all retries are
+ *          exhausted, so callers (e.g. circuit breakers) can observe the failure.
  */
 export async function verifyTransaction(
   server: Horizon.Server,
@@ -156,7 +157,7 @@ export async function verifyTransaction(
   retries = 3,
   backoffMs = 1000,
   expected?: ExpectedTxDetails
-): Promise<boolean | "error"> {
+): Promise<boolean> {
   const cacheKey = makeCacheKey(txHash, expected);
   const cached = verificationCache.get(cacheKey);
   if (cached) {
@@ -165,6 +166,8 @@ export async function verifyTransaction(
       return cached.result;
     }
   }
+
+  let lastError: unknown;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -187,10 +190,13 @@ export async function verifyTransaction(
       return true;
     } catch (e: unknown) {
       if (isHorizon404(e)) {
+        // Definitive "not found" — not an infrastructure failure
         setCacheEntry(cacheKey, { result: false, timestamp: Date.now() });
         return false;
       }
 
+      // Infrastructure failure — record and possibly retry
+      lastError = e;
       if (attempt < retries) {
         const delay = backoffMs * Math.pow(2, attempt - 1);
         logger.warn({ txHash, attempt, delay }, "Horizon verification failed, retrying");
@@ -201,6 +207,7 @@ export async function verifyTransaction(
     }
   }
 
-  setCacheEntry(cacheKey, { result: "error" as any, timestamp: Date.now() });
-  return "error";
+  // All retries exhausted due to infrastructure failures — throw so circuit breakers
+  // and other callers can observe and react to the outage.
+  throw lastError;
 }

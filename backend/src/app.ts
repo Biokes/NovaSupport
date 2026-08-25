@@ -4131,8 +4131,18 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         return sendError(res, 400, "Cannot change targetAmount of a reached milestone");
       }
 
-      const data: typeof parsed.data & { status?: string } = { ...parsed.data };
-      if (
+      // If the asset identity is changing, reset progress so amounts aren't
+      // silently misrepresented in the new currency.
+      const assetChanging =
+        (parsed.data.assetCode !== undefined && parsed.data.assetCode !== milestone.assetCode) ||
+        (parsed.data.assetIssuer !== undefined && parsed.data.assetIssuer !== milestone.assetIssuer);
+
+      const data: typeof parsed.data & { currentAmount?: number; status?: string } = { ...parsed.data };
+
+      if (assetChanging) {
+        data.currentAmount = 0;
+        data.status = "active";
+      } else if (
         parsed.data.targetAmount !== undefined &&
         Number(milestone.currentAmount) >= Number(parsed.data.targetAmount)
       ) {
@@ -4283,48 +4293,57 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       const limit = Math.min(parseInt(req.query.limit as string) || 10, 100);
       const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
 
-      const [transactions, totalCount] = await Promise.all([
+      const whereClause = { supporterAddress: address };
+
+      const [transactions, totalCount, assetAggregates, profileAggregates] = await Promise.all([
         prisma.supportTransaction.findMany({
-          where: { supporterAddress: address },
+          where: whereClause,
           include: { profile: { select: { username: true, displayName: true } } },
           orderBy: { createdAt: "desc" },
           take: limit,
           skip: offset,
         }),
         prisma.supportTransaction.count({
-          where: { supporterAddress: address },
+          where: whereClause,
+        }),
+        // Aggregate totals per asset across ALL matching transactions (not just this page)
+        prisma.supportTransaction.groupBy({
+          by: ["assetCode"],
+          where: whereClause,
+          _sum: { amount: true },
+        }),
+        // Count distinct profiles across ALL matching transactions
+        prisma.supportTransaction.groupBy({
+          by: ["profileId"],
+          where: whereClause,
+          _count: { id: true },
+          orderBy: { _count: { id: "desc" } },
         }),
       ]);
 
-      const profilesSupported = new Set(transactions.map((tx: any) => tx.profileId)).size;
-      const assetMap = new Map<string, number>();
-      for (const tx of transactions) {
-        const key = tx.assetCode as string;
-        assetMap.set(key, (assetMap.get(key) ?? 0) + parseFloat(tx.amount.toString()));
-      }
-      const totalByAsset = Array.from(assetMap.entries()).map(([assetCode, total]) => ({
-        assetCode,
-        total: total.toFixed(7),
+      const profilesSupported = profileAggregates.length;
+
+      const totalByAsset = assetAggregates.map((row: any) => ({
+        assetCode: row.assetCode as string,
+        total: (row._sum.amount ?? 0).toFixed(7),
       }));
 
-      const supportedProfiles = Array.from(
-        transactions
-          .reduce((profiles: Map<string, { username: string; displayName: string; totalTransactions: number }>, tx: any) => {
-            const existing = profiles.get(tx.profileId);
-            if (existing) {
-              existing.totalTransactions += 1;
-              return profiles;
-            }
+      // Fetch display names for all profiles that appear in the aggregate
+      const profileIds = profileAggregates.map((r: any) => r.profileId as string);
+      const profileRows = await prisma.profile.findMany({
+        where: { id: { in: profileIds } },
+        select: { id: true, username: true, displayName: true },
+      });
+      const profileById = new Map(profileRows.map((p: any) => [p.id, p]));
 
-            profiles.set(tx.profileId, {
-              username: tx.profile.username,
-              displayName: tx.profile.displayName,
-              totalTransactions: 1,
-            });
-            return profiles;
-          }, new Map())
-          .values(),
-      ).sort((a, b) => b.totalTransactions - a.totalTransactions);
+      const supportedProfiles = profileAggregates.map((row: any) => {
+        const p = profileById.get(row.profileId as string);
+        return {
+          username: p?.username ?? "",
+          displayName: p?.displayName ?? "",
+          totalTransactions: row._count.id as number,
+        };
+      });
 
       const history = transactions.map((tx: any) => ({
         id: tx.id,
