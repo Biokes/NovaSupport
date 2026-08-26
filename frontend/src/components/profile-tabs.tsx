@@ -408,17 +408,13 @@ export function ProfileTabs({ username }: { username: string }) {
                       </>
                     )
                   ) : (
-                    <>
-                      <p className="text-gray-500 font-medium">No support yet</p>
-                      <p className="text-sm text-gray-400 mt-1">Be the first to support {username}!</p>
-                    </>
+                    <EmptyState
+                      variant="no-transactions"
+                      title="No transactions yet"
+                      description="Be the first to support this creator!"
+                    />
                   )}
                 </div>
-                <EmptyState
-                  variant="no-transactions"
-                  title="No transactions yet"
-                  description="Be the first to support this creator!"
-                />
               </>
             )}
           </motion.div>
