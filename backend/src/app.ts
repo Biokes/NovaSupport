@@ -2144,6 +2144,9 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         if (ghData.twitterHandle) {
           ghData.twitterHandle = sanitizeString("twitterHandle", ghData.twitterHandle).result || null;
         }
+        if (ghData.avatarUrl) {
+          ghData.avatarUrl = sanitizeString("avatarUrl", ghData.avatarUrl).result || null;
+        }
 
         const updated = await prisma.profile.update({
           where: { username },
@@ -2353,7 +2356,8 @@ All errors return JSON with an \`error\` field and optional \`code\`:
             { message: "issuer is required for non-XLM assets" },
           ),
       )
-      .min(1),
+      .min(1)
+      .max(50),
   });
 
   /**
@@ -4029,6 +4033,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       const username = req.params.username as string;
       const profile = await prisma.profile.findUnique({
         where: { username },
+        include: { acceptedAssets: true },
       });
 
       if (!profile) {
@@ -4043,6 +4048,16 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       const parsed = createMilestoneSchema.safeParse(req.body);
       if (!parsed.success) {
         return sendError(res, 400, "Invalid request body");
+      }
+
+      const { assetCode, assetIssuer } = parsed.data;
+      const acceptedCodes = profile.acceptedAssets.map((a: { code: string }) => a.code);
+      if (acceptedCodes.length > 0 && !isAcceptedAssetPair(profile.acceptedAssets, assetCode, assetIssuer ?? null)) {
+        return sendError(
+          res,
+          400,
+          `Asset '${assetCode}'${assetIssuer ? ` (issuer ${assetIssuer})` : ""} is not accepted by this profile. Accepted: ${acceptedCodes.join(", ")}`,
+        );
       }
 
       const milestone = await prisma.$transaction(async (tx) => {
