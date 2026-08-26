@@ -3489,7 +3489,14 @@ All errors return JSON with an \`error\` field and optional \`code\`:
             }
           }
 
-          await processPendingWebhookDeliveries();
+          // The DB-poll fallback is only for when BullMQ isn't available —
+          // when it is, running this unconditionally would let every
+          // support-transaction request independently claim and deliver up
+          // to 50 pending rows outside the worker's rate limiter, defeating
+          // the point of enqueueing above (#975).
+          if (!getIsRedisAvailable()) {
+            await processPendingWebhookDeliveries();
+          }
         } catch (err) {
           logger.error(
             { err, txHash: supportRecord.txHash },
