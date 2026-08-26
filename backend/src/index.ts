@@ -125,9 +125,13 @@ const sorobanRpcUrl =
 const indexerStartLedger = process.env.INDEXER_START_LEDGER
   ? Number(process.env.INDEXER_START_LEDGER)
   : undefined;
-const indexerMaxPagesPerTick = process.env.INDEXER_MAX_PAGES_PER_TICK
+const rawMaxPages = process.env.INDEXER_MAX_PAGES_PER_TICK
   ? Number(process.env.INDEXER_MAX_PAGES_PER_TICK)
   : undefined;
+const indexerMaxPagesPerTick =
+  rawMaxPages !== undefined && Number.isFinite(rawMaxPages)
+    ? rawMaxPages
+    : undefined;
 
 const eventIndexer =
   contractId.trim().length > 0
