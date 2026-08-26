@@ -1,6 +1,7 @@
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { sendWeeklyDigests } from "./weekly-digest.js";
+import { escapeHtml } from "./email.js";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -172,4 +173,25 @@ test("sendWeeklyDigests skips profiles with no transactions this week", async ()
 
   // Should not throw even with no transactions
   await assert.doesNotReject(() => sendWeeklyDigests(mockPrisma as any));
+});
+
+// ── issue #984: XSS via assetCode in digest HTML ──────────────────────────────
+
+test("escapeHtml neutralises script tags in assetCode", () => {
+  const malicious = '<script>alert("xss")</script>';
+  const safe = escapeHtml(malicious);
+  assert.ok(!safe.includes("<script>"), "escaped output must not contain raw <script>");
+  assert.ok(safe.includes("&lt;script&gt;"), "escaped output must contain HTML entities");
+});
+
+test("escapeHtml neutralises double-quote in assetCode", () => {
+  const malicious = 'USDC" onload="alert(1)';
+  const safe = escapeHtml(malicious);
+  assert.ok(!safe.includes('"'), "escaped output must not contain raw double quotes");
+  assert.ok(safe.includes("&quot;"), "escaped output must contain &quot;");
+});
+
+test("escapeHtml leaves clean strings unchanged", () => {
+  assert.equal(escapeHtml("XLM"), "XLM");
+  assert.equal(escapeHtml("USDC"), "USDC");
 });
