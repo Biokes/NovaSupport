@@ -133,7 +133,7 @@ export default function CreatePage() {
 
   const handleNext = () => {
     if (step === 1) {
-      if (!form.displayName || !form.username) {
+      if (!form.displayName.trim() || !form.username.trim()) {
         setError("Display name and username are required.");
         return;
       }
@@ -376,8 +376,8 @@ export default function CreatePage() {
                       placeholder="G…"
                       value={form.walletAddress}
                       onChange={(e) => {
-                        const raw = e.target.value;
-                        const cleaned = raw.length > 56 && !raw.startsWith("G") ? raw.slice(0, 56) : raw;
+                        const raw = e.target.value.trim();
+                        const cleaned = raw.startsWith("G") && raw.length > 56 ? raw.slice(0, 56) : raw;
                         setForm((prev) => ({ ...prev, walletAddress: cleaned }));
                         setError(null);
                       }}
