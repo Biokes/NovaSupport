@@ -47,7 +47,7 @@ NovaSupport/
 
 Before you begin, ensure you have:
 
-- **Node.js 18+** and npm
+- **Node.js 22+** and npm
 - **Rust** and Cargo (for Soroban contract)
 - **Soroban CLI** - Install: `cargo install --locked soroban-cli`
 - **PostgreSQL** database (or Supabase account)
