@@ -28,7 +28,6 @@ pub enum Error {
     // Balance and transfer errors (300-399)
     InsufficientBalance = 300,
     InsufficientContractBalance = 301,
-    TransferFailed = 302,
     WithdrawAmountExceedsBalance = 303,
 
     // Storage and data errors (400-499)

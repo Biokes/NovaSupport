@@ -150,9 +150,9 @@ export function createWebhookWorker(): Worker | null {
         Metrics.webhookDeliveryErrors();
 
         if (!willRetry) {
-          // Don't retry in BullMQ either
           throw new Error(`Permanent failure: ${result.error}`);
         }
+        throw new Error(`Retryable failure: ${result.error}`);
       }
     },
     {
