@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { headers } from "next/headers";
 import type { Metadata } from "next";
 import { AppShell } from "@/components/app-shell";
 import { ProfileCard } from "@/components/profile-card";
@@ -250,10 +251,13 @@ export default async function ProfilePage({ params }: PageProps) {
     },
   };
 
+  const nonce = headers().get("x-csp-nonce") ?? undefined;
+
   return (
     <AppShell>
       <script
         type="application/ld+json"
+        nonce={nonce}
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8 items-start animate-fade-in">
