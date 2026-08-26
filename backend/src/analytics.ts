@@ -151,10 +151,17 @@ export async function getAnalytics(
 
   analyticsCache.set(cacheKey, { data: result, timestamp: Date.now() });
 
-  // Evict oldest entries when the cache exceeds max size to prevent OOM
+  // Evict the oldest 20% of entries when the cache exceeds max size to
+  // prevent OOM. A single-entry eviction (the previous behavior, see #950)
+  // can't keep up when writes arrive faster than one-at-a-time removal, so
+  // this removes a whole batch in one pass. Map iteration order is
+  // insertion order, so the first N keys are the oldest.
   if (analyticsCache.size > CACHE_MAX_SIZE) {
-    const oldest = analyticsCache.keys().next().value;
-    if (oldest !== undefined) analyticsCache.delete(oldest);
+    const evictCount = Math.max(1, Math.floor(CACHE_MAX_SIZE * 0.2));
+    const keysToEvict = Array.from(analyticsCache.keys()).slice(0, evictCount);
+    for (const key of keysToEvict) {
+      analyticsCache.delete(key);
+    }
   }
 
   if (format === "csv") {
