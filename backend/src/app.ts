@@ -853,62 +853,85 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       return sendError(res, 400, "Invalid wallet address");
     }
 
-    const challengeRow = await prisma.authChallenge.findUnique({
-      where: { walletAddress },
-    });
-    if (!challengeRow) {
-      return sendError(res, 400, "No challenge found for this wallet");
-    }
-
-    // Check if challenge expired
-    if (challengeRow.expiresAt < new Date()) {
-      await prisma.authChallenge.delete({ where: { walletAddress } });
-      return sendError(res, 400, "Challenge expired");
-    }
-
-    // Verify the signature
-    const isValid = verifySignature(
-      walletAddress,
-      challengeRow.challenge,
-      signature,
-    );
-    if (!isValid) {
-      return sendError(res, 401, "Invalid signature");
-    }
-
-    // Clear the used challenge
-    await prisma.authChallenge.delete({ where: { walletAddress } });
-
-    // Create or get user
-    let user = await prisma.user.findFirst({
-      where: { email: walletAddress },
-    });
-
-    if (!user) {
-      user = await prisma.user.create({
-        data: { email: walletAddress },
+    try {
+      const challengeRow = await prisma.authChallenge.findUnique({
+        where: { walletAddress },
       });
+      if (!challengeRow) {
+        return sendError(res, 400, "No challenge found for this wallet");
+      }
+
+      // Check if challenge expired
+      if (challengeRow.expiresAt < new Date()) {
+        await prisma.authChallenge.delete({ where: { walletAddress } });
+        return sendError(res, 400, "Challenge expired");
+      }
+
+      // Verify the signature
+      const isValid = verifySignature(
+        walletAddress,
+        challengeRow.challenge,
+        signature,
+      );
+      if (!isValid) {
+        return sendError(res, 401, "Invalid signature");
+      }
+
+      // Clear the used challenge
+      await prisma.authChallenge.delete({ where: { walletAddress } });
+
+      // Create or get user
+      let user = await prisma.user.findFirst({
+        where: { email: walletAddress },
+      });
+
+      if (!user) {
+        user = await prisma.user.create({
+          data: { email: walletAddress },
+        });
+      }
+
+      // Sign JWT
+      const token = signJWT(walletAddress, user.id);
+
+      // Attach wallet address as Sentry user context for session breadcrumbs
+      if (process.env.SENTRY_DSN) {
+        Sentry.setUser({ id: user.id, username: walletAddress });
+      }
+
+      // #759: Set httpOnly cookie so the browser sends it automatically.
+      // The token is still returned in the JSON body for API / mobile consumers
+      // that cannot access httpOnly cookies.
+      res.cookie("auth_token", token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 60 * 60 * 1000, // 1 hour — matches JWT_EXPIRY
+      });
+
+      res.json({ token, walletAddress, userId: user.id });
+    } catch (error) {
+      // #974: two concurrent /auth/verify calls for the same wallet can both
+      // read the same challenge row before either deletes it — the loser's
+      // delete throws P2025, or its user.create() throws P2002 on the email
+      // unique constraint. Both mean the other request already completed
+      // the verification, so the client can just retry.
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error.code === "P2025" || error.code === "P2002")
+      ) {
+        return sendError(
+          res,
+          409,
+          "Verification already in progress for this wallet, please retry",
+          "VERIFY_RACE",
+        );
+      }
+      req.log.error({ err: error }, "Error verifying auth challenge");
+      return sendError(res, 500, "Internal server error");
     }
-
-    // Sign JWT
-    const token = signJWT(walletAddress, user.id);
-
-    // Attach wallet address as Sentry user context for session breadcrumbs
-    if (process.env.SENTRY_DSN) {
-      Sentry.setUser({ id: user.id, username: walletAddress });
-    }
-
-    // #759: Set httpOnly cookie so the browser sends it automatically.
-    // The token is still returned in the JSON body for API / mobile consumers
-    // that cannot access httpOnly cookies.
-    res.cookie("auth_token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 1000, // 1 hour — matches JWT_EXPIRY
-    });
-
-    res.json({ token, walletAddress, userId: user.id });
   });
 
   /**
