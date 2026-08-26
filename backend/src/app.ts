@@ -103,11 +103,25 @@ function createPrismaCircuitBreakerStorage(name: string): CircuitBreakerStorage 
     },
   };
 }
+const rawHorizonFailureThreshold = process.env.HORIZON_CIRCUIT_BREAKER_THRESHOLD
+  ? Number(process.env.HORIZON_CIRCUIT_BREAKER_THRESHOLD)
+  : undefined;
+const horizonFailureThreshold =
+  rawHorizonFailureThreshold !== undefined && Number.isFinite(rawHorizonFailureThreshold)
+    ? rawHorizonFailureThreshold
+    : 5;
+const rawHorizonResetTimeoutMs = process.env.HORIZON_CIRCUIT_BREAKER_RESET_TIMEOUT_MS
+  ? Number(process.env.HORIZON_CIRCUIT_BREAKER_RESET_TIMEOUT_MS)
+  : undefined;
+const horizonResetTimeoutMs =
+  rawHorizonResetTimeoutMs !== undefined && Number.isFinite(rawHorizonResetTimeoutMs)
+    ? rawHorizonResetTimeoutMs
+    : 30000;
 const horizonCircuitBreaker = new CircuitBreaker(
-  5,
-  30000,
+  horizonFailureThreshold,
+  horizonResetTimeoutMs,
   createPrismaCircuitBreakerStorage("horizon"),
-); // 5 failures, 30s reset
+); // defaults: 5 failures, 30s reset — configurable via HORIZON_CIRCUIT_BREAKER_THRESHOLD / HORIZON_CIRCUIT_BREAKER_RESET_TIMEOUT_MS
 
 const upload = multer({
   storage: multer.memoryStorage(),
