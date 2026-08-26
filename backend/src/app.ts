@@ -2467,6 +2467,20 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       }
 
       try {
+        // Deduplicate assets by (code, issuer) before insert
+        const seen = new Set<string>();
+        const duplicates: string[] = [];
+        for (const asset of parsed.data.assets) {
+          const key = `${asset.code}:${asset.issuer ?? ""}`;
+          if (seen.has(key)) {
+            duplicates.push(`${asset.code}${asset.issuer ? ` (issuer ${asset.issuer})` : ""}`);
+          }
+          seen.add(key);
+        }
+        if (duplicates.length > 0) {
+          return sendError(res, 422, `Duplicate assets: ${duplicates.join(", ")}`);
+        }
+
         await prisma.$transaction([
           prisma.acceptedAsset.deleteMany({ where: { profileId: profile.id } }),
           prisma.acceptedAsset.createMany({
@@ -2919,20 +2933,23 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     if (!profile) return;
 
     try {
-      const result = await prisma.$transaction(async (tx) => {
-        const existingCount = await tx.webhook.count({
-          where: { profileId: profile.id },
-        });
-        if (existingCount >= 10) {
-          throw new Error("MAX_WEBHOOKS_EXCEEDED");
-        }
+      const result = await prisma.$transaction(
+        async (tx) => {
+          const existingCount = await tx.webhook.count({
+            where: { profileId: profile.id },
+          });
+          if (existingCount >= 10) {
+            throw new Error("MAX_WEBHOOKS_EXCEEDED");
+          }
 
-        const secret = randomBytes(32).toString("hex");
-        const webhook = await tx.webhook.create({
-          data: { url: parsed.data.url, secretHash: secret, profileId: profile.id },
-        });
-        return { webhook, secret };
-      });
+          const secret = randomBytes(32).toString("hex");
+          const webhook = await tx.webhook.create({
+            data: { url: parsed.data.url, secretHash: secret, profileId: profile.id },
+          });
+          return { webhook, secret };
+        },
+        { isolationLevel: "Serializable" },
+      );
 
       return res.status(201).json({ id: result.webhook.id, url: result.webhook.url, secret: result.secret });
     } catch (err) {
@@ -3999,14 +4016,25 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     }
 
     try {
-      const result = await prisma.webhookDelivery.updateMany({
+      const failed = await prisma.webhookDelivery.findMany({
         where: { status: "failed" },
+        select: { id: true },
+      });
+
+      const result = await prisma.webhookDelivery.updateMany({
+        where: { id: { in: failed.map((d) => d.id) } },
         data: {
           status: "pending",
           attemptCount: 0,
           nextRetryAt: new Date(),
         },
       });
+
+      for (const delivery of failed) {
+        enqueueWebhookDelivery(delivery.id).catch((err) => {
+          req.log.warn({ deliveryId: delivery.id, err }, "Failed to enqueue requeued webhook");
+        });
+      }
 
       req.log.info({ count: result.count }, "requeued failed webhooks");
       return res.json({ count: result.count });
@@ -4104,26 +4132,29 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         );
       }
 
-      const milestone = await prisma.$transaction(async (tx) => {
-        const activeCount = await tx.milestone.count({
-          where: { profileId: profile.id, status: { not: "reached" } },
-        });
-        if (activeCount >= 20) {
-          throw new Error("MAX_MILESTONES_EXCEEDED");
-        }
+      const milestone = await prisma.$transaction(
+        async (tx) => {
+          const activeCount = await tx.milestone.count({
+            where: { profileId: profile.id, status: { not: "reached" } },
+          });
+          if (activeCount >= 20) {
+            throw new Error("MAX_MILESTONES_EXCEEDED");
+          }
 
-        const created = await tx.milestone.create({
-          data: {
-            title: parsed.data.title,
-            description: parsed.data.description,
-            targetAmount: parsed.data.targetAmount,
-            assetCode: parsed.data.assetCode,
-            assetIssuer: parsed.data.assetIssuer ?? null,
-            profileId: profile.id,
-          },
-        });
-        return created;
-      });
+          const created = await tx.milestone.create({
+            data: {
+              title: parsed.data.title,
+              description: parsed.data.description,
+              targetAmount: parsed.data.targetAmount,
+              assetCode: parsed.data.assetCode,
+              assetIssuer: parsed.data.assetIssuer ?? null,
+              profileId: profile.id,
+            },
+          });
+          return created;
+        },
+        { isolationLevel: "Serializable" },
+      );
 
       res.status(201).json(milestone);
     } catch (err) {

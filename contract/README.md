@@ -222,11 +222,11 @@ stellar contract invoke --network testnet-alt ...
 3. **Verify contract state:**
 
    ```bash
-   # Check if contract is initialized
-   stellar contract invoke --id <CONTRACT_ID> --network testnet -- is_initialized
+   # Check contract support count
+   stellar contract invoke --id <CONTRACT_ID> --network testnet -- support_count
 
-   # Check pause status
-   stellar contract invoke --id <CONTRACT_ID> --network testnet -- is_paused
+   # Check total by asset
+   stellar contract invoke --id <CONTRACT_ID> --network testnet -- get_total_by_asset --asset_code XLM
    ```
 
 4. **Test with Stellar Laboratory:**
