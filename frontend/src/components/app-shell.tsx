@@ -177,7 +177,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                           />
                         ) : (
                           <div className="h-10 w-10 rounded-full bg-gradient-to-br from-mint to-gold flex items-center justify-center text-sm font-bold text-ink">
-                            {result.displayName[0].toUpperCase()}
+                            {(result.displayName?.[0] || '?').toUpperCase()}
                           </div>
                         )}
                         <div className="flex-1 min-w-0">

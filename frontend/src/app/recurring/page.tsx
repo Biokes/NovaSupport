@@ -233,7 +233,7 @@ export default function RecurringPage() {
     );
   }
 
-  const hasAny = subscriptions.length > 0;
+  const hasAny = activeSubscriptions.length + pausedSubscriptions.length > 0;
 
   return (
     <AppShell>
