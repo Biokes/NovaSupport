@@ -17,6 +17,7 @@ coverage/
 .vscode/
 target/
 Cargo.lock
+!contract/Cargo.lock
 backend/prisma/dev.db
 backend/prisma/dev.db-journal
 
