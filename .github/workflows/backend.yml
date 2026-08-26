@@ -103,7 +103,7 @@ jobs:
         run: npm run build
 
       - name: Upload source maps to Sentry
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && secrets.SENTRY_AUTH_TOKEN != ''
         run: npx @sentry/cli releases files "$SENTRY_RELEASE" upload-sourcemaps ./dist
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
