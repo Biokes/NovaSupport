@@ -190,6 +190,101 @@ function convertToCSV(analytics: any): string {
   return csv;
 }
 
+interface GapFillInput {
+  date: Date;
+  total: number | string | bigint;
+  txCount: number | string | bigint;
+  uniqueContributors?: number | string | bigint;
+  avgContribution?: number | string | bigint;
+}
+
+interface GapFillOutput {
+  date: Date;
+  amount: string;
+  count: number;
+  uniqueContributors: number;
+  avgContribution: string;
+}
+
+export function fillGaps(
+  results: GapFillInput[],
+  period: string,
+  from: Date,
+  to: Date,
+): { data: GapFillOutput[]; period: string } {
+  const dataMap = new Map<string, GapFillInput>();
+  for (const row of results) {
+    const d = row.date instanceof Date ? row.date : new Date(row.date);
+    let key: string;
+    if (period === "monthly") {
+      key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    } else if (period === "weekly") {
+      const startOfWeek = new Date(d);
+      startOfWeek.setDate(d.getDate() - d.getDay());
+      key = startOfWeek.toISOString().split("T")[0];
+    } else {
+      key = d.toISOString().split("T")[0];
+    }
+    dataMap.set(key, row);
+  }
+
+  const filled: GapFillOutput[] = [];
+  const cursor = new Date(from);
+
+  while (cursor <= to) {
+    let key: string;
+    let nextCursor: Date;
+
+    if (period === "monthly") {
+      key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+      nextCursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+    } else if (period === "weekly") {
+      const startOfWeek = new Date(cursor);
+      startOfWeek.setDate(cursor.getDate() - cursor.getDay());
+      key = startOfWeek.toISOString().split("T")[0];
+      nextCursor = new Date(cursor);
+      nextCursor.setDate(cursor.getDate() + 7);
+    } else {
+      key = cursor.toISOString().split("T")[0];
+      nextCursor = new Date(cursor);
+      nextCursor.setDate(cursor.getDate() + 1);
+    }
+
+    const existing = dataMap.get(key);
+    if (existing) {
+      const total = Number(existing.total);
+      const count = Number(existing.txCount);
+      const uniqueContributors = existing.uniqueContributors != null
+        ? Number(existing.uniqueContributors)
+        : 0;
+      const avgContribution = existing.avgContribution != null
+        ? String(existing.avgContribution)
+        : count > 0
+          ? String(total / count)
+          : "0";
+      filled.push({
+        date: new Date(cursor),
+        amount: String(total),
+        count,
+        uniqueContributors,
+        avgContribution,
+      });
+    } else {
+      filled.push({
+        date: new Date(cursor),
+        amount: "0",
+        count: 0,
+        uniqueContributors: 0,
+        avgContribution: "0",
+      });
+    }
+
+    cursor.setTime(nextCursor.getTime());
+  }
+
+  return { data: filled, period };
+}
+
 export function clearAnalyticsCache(profileId?: string): void {
   if (profileId) {
     Array.from(analyticsCache.keys())

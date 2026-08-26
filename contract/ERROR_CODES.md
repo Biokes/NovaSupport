@@ -44,7 +44,6 @@ Error codes are organized into ranges by category:
 |------|------------|-------------|
 | 300 | `InsufficientBalance` | Supporter has insufficient token balance |
 | 301 | `InsufficientContractBalance` | Contract has insufficient balance for withdrawal |
-| 302 | `TransferFailed` | Token transfer operation failed |
 | 303 | `WithdrawAmountExceedsBalance` | Withdrawal amount exceeds recipient's balance |
 
 ### Storage and Data Errors (400-499)
