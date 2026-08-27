@@ -113,11 +113,13 @@ export default function EditProfilePage() {
         if (!connectedAddress) {
           // Wallet not connected or Freighter is locked — show a prompt instead of silently redirecting
           setWalletPrompt("locked");
+          setOwnershipChecked(true);
           return;
         }
 
         if (connectedAddress !== profile.walletAddress) {
           setWalletPrompt("not-owner");
+          setOwnershipChecked(true);
           return;
         }
 
@@ -138,6 +140,7 @@ export default function EditProfilePage() {
         );
       } catch {
         setAuthError("Failed to load profile.");
+        setOwnershipChecked(true);
       } finally {
         setLoading(false);
       }
