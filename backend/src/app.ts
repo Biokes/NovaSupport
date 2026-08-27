@@ -4090,7 +4090,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
   // ── Milestones ─────────────────────────────────────────────────────────
 
   const createMilestoneSchema = z.object({
-    title: z.string().min(1).max(100),
+    title: z.string().trim().min(1).max(100),
     description: z.string().max(500).optional().nullable(),
     targetAmount: z
       .string()

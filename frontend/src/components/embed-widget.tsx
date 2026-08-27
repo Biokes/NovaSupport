@@ -95,7 +95,7 @@ export function EmbedWidget({
           />
         ) : (
           <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold flex-shrink-0">
-            {displayName.slice(0, 2).toUpperCase()}
+            {(displayName ? displayName.slice(0, 2) : "?").toUpperCase()}
           </div>
         )}
         <div className="min-w-0">
