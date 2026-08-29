@@ -166,10 +166,12 @@ pub fn unpause(e: Env) -> Result<(), Error> {
             return Err(Error::InvalidAssetCode);
         }
 
-        // Transfer funds from supporter to contract
+        // Checks: call balance() on the (potentially untrusted) asset contract
+        // here — at function entry, before any storage reads or writes — so that
+        // a malicious token's re-entrant call into support() finds no partially-
+        // updated state to exploit.  This is the first and only external call
+        // before the Effects block.
         let client = soroban_sdk::token::Client::new(&e, &asset);
-        
-        // Check supporter balance before transfer
         let supporter_balance = client.balance(&s);
         if supporter_balance < o {
             return Err(Error::InsufficientBalance);
@@ -259,6 +261,17 @@ pub fn unpause(e: Env) -> Result<(), Error> {
             return Err(Error::ZeroAmount);
         }
 
+        // Checks: call balance() on the (potentially untrusted) asset contract
+        // here — at function entry, before any storage reads or writes — so that
+        // a malicious token's re-entrant call into withdraw() finds no partially-
+        // updated state to exploit.  This is the first and only external call
+        // before the Effects block.
+        let client = soroban_sdk::token::Client::new(&e, &asset);
+        let contract_balance = client.balance(&e.current_contract_address());
+        if contract_balance < amount {
+            return Err(Error::InsufficientContractBalance);
+        }
+
         let st = e.storage().persistent();
         let key = DataKey::TotalByAsset(recipient.clone(), asset.clone());
 
@@ -276,13 +289,6 @@ pub fn unpause(e: Env) -> Result<(), Error> {
         // Check if withdrawal amount exceeds available balance
         if amount > balance {
             return Err(Error::WithdrawAmountExceedsBalance);
-        }
-
-        // Check contract's token balance
-        let client = soroban_sdk::token::Client::new(&e, &asset);
-        let contract_balance = client.balance(&e.current_contract_address());
-        if contract_balance < amount {
-            return Err(Error::InsufficientContractBalance);
         }
 
         // Effects: update all storage BEFORE the external token transfer (CEI)
