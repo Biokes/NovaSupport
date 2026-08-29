@@ -138,28 +138,49 @@ export function ProfileTabs({ username }: { username: string }) {
     };
   }, []);
 
+  // Abort the in-flight request whenever the query changes so a slower earlier
+  // response can never overwrite the results of a newer one (#1064).
   useEffect(() => {
+    const controller = new AbortController();
+    const isStale = () => controller.signal.aborted;
+
     if (activeTab === "history") {
       setLoading(true);
       const params = new URLSearchParams();
       if (debouncedSearch.trim()) params.set("q", debouncedSearch.trim());
       const url = `${API_BASE_URL}/profiles/${username}/transactions${params.toString() ? "?" + params.toString() : ""}`;
-      fetch(url)
+      fetch(url, { signal: controller.signal })
         .then(res => res.json())
         .then(data => {
+          if (isStale()) return;
           setTransactions(data.transactions || []);
         })
-        .catch(err => console.error(err))
-        .finally(() => setLoading(false));
+        .catch(err => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          console.error(err);
+        })
+        .finally(() => {
+          if (!isStale()) setLoading(false);
+        });
     }
     if (activeTab === "badges") {
       setBadgesLoading(true);
-      fetch(`${API_BASE_URL}/profiles/${username}/badges`)
+      fetch(`${API_BASE_URL}/profiles/${username}/badges`, { signal: controller.signal })
         .then(res => res.json())
-        .then(data => setBadges(data.badges || []))
-        .catch(err => console.error(err))
-        .finally(() => setBadgesLoading(false));
+        .then(data => {
+          if (isStale()) return;
+          setBadges(data.badges || []);
+        })
+        .catch(err => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+          console.error(err);
+        })
+        .finally(() => {
+          if (!isStale()) setBadgesLoading(false);
+        });
     }
+
+    return () => controller.abort();
   }, [username, activeTab, debouncedSearch]);
 
   // ── Filtered transactions (date only; search handled by API) ──────────────
