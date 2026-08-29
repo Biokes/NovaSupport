@@ -1,7 +1,7 @@
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import express, { Response } from "express";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { rateLimit } from "express-rate-limit";
 import { pinoHttp } from "pino-http";
 import type { Logger } from "pino";
@@ -2943,8 +2943,9 @@ All errors return JSON with an \`error\` field and optional \`code\`:
           }
 
           const secret = randomBytes(32).toString("hex");
+          const secretHashValue = createHash("sha256").update(secret).digest("hex");
           const webhook = await tx.webhook.create({
-            data: { url: parsed.data.url, secretHash: secret, profileId: profile.id },
+            data: { url: parsed.data.url, secretHash: secretHashValue, signingKey: secret, profileId: profile.id },
           });
           return { webhook, secret };
         },
