@@ -792,8 +792,8 @@ export default function DashboardPage() {
               value={`${data.summary.totalRaised.toLocaleString()} ${
                 assetBreakdown.length > 0
                   ? assetBreakdown.reduce((a, b) =>
-                      a.value >= b.value ? a : b
-                    ).name
+                      a.amount >= b.amount ? a : b
+                    ).assetCode
                   : "XLM"
               }`}
               icon={<Wallet className="text-mint" />}
@@ -812,8 +812,8 @@ export default function DashboardPage() {
               value={`${data.summary.avgContribution} ${
                 assetBreakdown.length > 0
                   ? assetBreakdown.reduce((a, b) =>
-                      a.value >= b.value ? a : b
-                    ).name
+                      a.amount >= b.amount ? a : b
+                    ).assetCode
                   : "XLM"
               }`}
               icon={<TrendingUp className="text-gold" />}
