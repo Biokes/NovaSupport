@@ -111,7 +111,7 @@ Behavior:
 - Transfers `amount` tokens from `supporter` to the contract via the Soroban token client.
 - Increments the global `SupportCount`.
 - Increments `RecipientCount` for this recipient.
-- Adds `amount` to `RecipientTotal` for this recipient.
+- Adds `amount` to `RecipientTotal` for this recipient and asset pair.
 - Adds `amount` to `TotalByAsset` for this recipient and asset pair.
 - Emits a `support` event with the full payload including a timestamp.
 - Returns the new global support count.
@@ -195,18 +195,19 @@ Returns:
 
 - `u32` - Number of support actions for this recipient. Returns `0` if the recipient has never received support.
 
-### `get_recipient_total(env, recipient) -> i128`
+### `get_recipient_total(env, recipient, asset) -> i128`
 
-Returns the total amount of all assets received by a specific recipient (including withdrawals deducted).
+Returns the total amount of a specific asset received by a specific recipient (including withdrawals deducted). Mirrors `get_total_by_asset` and reads from the same `RecipientTotal(Address, Address)` storage key.
 
 Parameters:
 
 - `env: Env` - Soroban execution environment.
 - `recipient: Address` - Address to query.
+- `asset: Address` - Soroban token contract address to query.
 
 Returns:
 
-- `i128` - Total amount received by this recipient. Returns `0` if unknown.
+- `i128` - Total amount of this asset received by this recipient. Returns `0` if unknown.
 
 ### `get_total_by_asset(env, recipient, asset) -> i128`
 
@@ -284,7 +285,7 @@ Event fields (tuple):
 | --- | --- | --- |
 | `SupportCount` | `u32` | Global count of successful `support()` calls stored in persistent storage. |
 | `RecipientCount(Address)` | `u32` | Per-recipient count of support actions received. |
-| `RecipientTotal(Address)` | `i128` | Per-recipient total amount across all assets received (reduced by withdrawals). |
+| `RecipientTotal(Address, Address)` | `i128` | Per-recipient, per-asset total amount received (reduced by withdrawals). First address is the recipient, second is the asset token contract. |
 | `TotalByAsset(Address, Address)` | `i128` | Per-recipient, per-asset total amount received (reduced by withdrawals). First address is the recipient, second is the asset token contract. |
 | `Admin` | `Address` | Contract administrator address. Set during `initialize()`. |
 | `Paused` | `bool` | Whether the contract is paused. Toggled by `pause()` / `unpause()`. |
@@ -306,7 +307,6 @@ The contract defines a `#[contracterror]` enum with the following numeric varian
 | `AlreadyInitialized` | 202 | `initialize()` called more than once. |
 | `InsufficientBalance` | 300 | Supporter does not have enough tokens. |
 | `InsufficientContractBalance` | 301 | Contract does not hold enough tokens for withdrawal. |
-| `TransferFailed` | 302 | Token transfer failed (reserved). |
 | `WithdrawAmountExceedsBalance` | 303 | Requested withdrawal exceeds recipient's recorded balance. |
 | `RecipientNotFound` | 402 | Recipient has never received support. |
 | `ZeroBalance` | 403 | Recipient's recorded balance is zero. |
