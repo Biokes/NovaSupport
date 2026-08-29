@@ -1,7 +1,7 @@
 name: E2E (Playwright)
 
 on:
-  pull_request_target:
+  pull_request:
     paths:
       - "frontend/**"
       - ".github/workflows/e2e.yml"
@@ -21,9 +21,6 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          allow-unsafe-pr-checkout: true
       - uses: actions/setup-node@v4
         with:
           node-version: 22.x
