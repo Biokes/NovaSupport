@@ -64,7 +64,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // Open the dropdown up front. It used to be opened only once results came
+    // back, in the same tick that cleared isSearching — so the "Searching…"
+    // state was never actually rendered for a fresh search (#1063).
     setIsSearching(true);
+    setShowDropdown(true);
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -79,8 +83,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         if (response.ok) {
           const data = await response.json();
           setSearchResults(data);
-          setShowDropdown(true);
         } else {
+          // A failed lookup closes the dropdown rather than claiming
+          // "No results found", which would misreport the failure.
           setSearchResults([]);
           setShowDropdown(false);
         }
