@@ -27,7 +27,7 @@ export default function PrivacyPage() {
 
         <Section title="1. Introduction">
           <p>
-            NovaSupport ("we", "our", or "us") operates the NovaSupport
+            NovaSupport (&quot;we&quot;, &quot;our&quot;, or &quot;us&quot;) operates the NovaSupport
             platform, a Stellar-native creator support service. This Privacy
             Policy explains what personal data we collect, why we collect it,
             how we use it, and the rights you have regarding your information.
@@ -204,8 +204,8 @@ export default function PrivacyPage() {
               inaccurate personal data via your profile settings.
             </li>
             <li>
-              <strong className="text-white/80">Erasure ("right to be
-              forgotten")</strong> — request deletion of your profile and
+              <strong className="text-white/80">Erasure (&quot;right to be
+              forgotten&quot;)</strong> — request deletion of your profile and
               off-chain data. Note that on-chain transaction data cannot be
               erased from the Stellar blockchain.
             </li>
@@ -256,7 +256,7 @@ export default function PrivacyPage() {
         <Section title="10. Changes to This Policy">
           <p>
             We may update this Privacy Policy periodically. Changes will be
-            posted on this page with an updated "Last updated" date. Continued
+            posted on this page with an updated &quot;Last updated&quot; date. Continued
             use of the Platform after changes constitutes acceptance of the
             revised Policy.
           </p>

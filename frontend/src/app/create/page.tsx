@@ -429,6 +429,7 @@ export default function CreatePage() {
                       <button
                         key={asset}
                         type="button"
+                        aria-pressed={assets.some((a) => a.code === asset)}
                         onClick={() => {
                           const isSelected = assets.some((a) => a.code === asset);
                           setAssets(
