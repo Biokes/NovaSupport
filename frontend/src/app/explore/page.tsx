@@ -1,8 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { API_BASE_URL } from "@/lib/config";
+import { useInfiniteScroll } from "@/hooks/use-infinite-scroll";
+import { EmptyState } from "@/components/empty-state";
 
 type Profile = {
   id: string;
@@ -14,7 +17,7 @@ type Profile = {
 };
 
 type SortOption = "newest" | "most_supported" | "most_transactions";
-type AssetFilter = "all" | "XLM" | "USDC";
+type AssetFilter = string;
 
 export default function ExplorePage() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -22,18 +25,57 @@ export default function ExplorePage() {
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<SortOption>("newest");
   const [asset, setAsset] = useState<AssetFilter>("all");
+  const [assetIssuer, setAssetIssuer] = useState<string>("");
+  const [availableAssets, setAvailableAssets] = useState<string[]>([]);
+  const [availableIssuers, setAvailableIssuers] = useState<
+    Array<{ code: string; issuer: string }>
+  >([]);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const limit = 20;
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const sentinelRef = useInfiniteScroll({
+    onLoadMore: handleLoadMore,
+    hasMore,
+    isLoading: loading,
+    threshold: 0.8,
+  });
 
   useEffect(() => {
     setOffset(0);
     setProfiles([]);
     setHasMore(true);
     fetchProfiles(0, true);
-  }, [sort, asset]);
+  }, [sort, asset, assetIssuer]);
+
+  useEffect(() => {
+    const assetCodes = new Set<string>();
+    const issuers = new Set<string>();
+    profiles.forEach((p) => {
+      p.acceptedAssets.forEach((a) => {
+        assetCodes.add(a.code);
+        if (a.issuer) {
+          issuers.add(`${a.code}:${a.issuer}`);
+        }
+      });
+    });
+    const uniqueAssets = Array.from(assetCodes).sort();
+    setAvailableAssets(uniqueAssets);
+    const unique = Array.from(issuers)
+      .map((str) => {
+        const [code, issuer] = str.split(":");
+        return { code, issuer };
+      })
+      .sort((a, b) => a.code.localeCompare(b.code) || a.issuer.localeCompare(b.issuer));
+    setAvailableIssuers(unique);
+  }, [profiles]);
 
   async function fetchProfiles(currentOffset: number, reset = false) {
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     try {
       setLoading(true);
       setError(null);
@@ -48,7 +90,13 @@ export default function ExplorePage() {
         params.append("asset", asset);
       }
 
-      const response = await fetch(`${API_BASE_URL}/profiles?${params}`);
+      if (assetIssuer) {
+        params.append("assetIssuer", assetIssuer);
+      }
+
+      const response = await fetch(`${API_BASE_URL}/profiles?${params}`, {
+        signal: controller.signal,
+      });
 
       if (!response.ok) {
         throw new Error("Failed to fetch profiles");
@@ -64,9 +112,12 @@ export default function ExplorePage() {
 
       setHasMore(data.profiles.length === limit);
     } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Failed to load profiles");
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) {
+        setLoading(false);
+      }
     }
   }
 
@@ -75,6 +126,10 @@ export default function ExplorePage() {
     setOffset(newOffset);
     fetchProfiles(newOffset);
   }
+
+  const filteredIssuers = availableIssuers.filter((i) =>
+    asset === "all" || i.code === asset
+  );
 
   return (
     <div className="min-h-screen px-6 py-8">
@@ -107,14 +162,40 @@ export default function ExplorePage() {
             </label>
             <select
               value={asset}
-              onChange={(e) => setAsset(e.target.value as AssetFilter)}
+              onChange={(e) => {
+                setAsset(e.target.value);
+                setAssetIssuer("");
+              }}
               className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white focus:border-mint/50 focus:outline-none"
             >
               <option value="all">All</option>
-              <option value="XLM">XLM</option>
-              <option value="USDC">USDC</option>
+              {availableAssets.map((code) => (
+                <option key={code} value={code}>
+                  {code}
+                </option>
+              ))}
             </select>
           </div>
+
+          {filteredIssuers.length > 0 && (
+            <div>
+              <label className="text-xs uppercase tracking-[0.2em] text-sky/70 block mb-2">
+                Issuer
+              </label>
+              <select
+                value={assetIssuer}
+                onChange={(e) => setAssetIssuer(e.target.value)}
+                className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm text-white focus:border-mint/50 focus:outline-none"
+              >
+                <option value="">All Issuers</option>
+                {filteredIssuers.map((issuer) => (
+                  <option key={issuer.issuer} value={issuer.issuer}>
+                    {issuer.code} — {issuer.issuer.slice(0, 4)}…{issuer.issuer.slice(-4)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
         {/* Loading skeleton */}
@@ -151,14 +232,16 @@ export default function ExplorePage() {
                   className="rounded-[2rem] border border-white/10 bg-white/5 p-6 transition hover:border-mint/30 hover:bg-white/10"
                 >
                   {profile.avatarUrl ? (
-                    <img
+                    <Image
                       src={profile.avatarUrl}
                       alt={profile.displayName}
+                      width={80}
+                      height={80}
                       className="h-20 w-20 rounded-full object-cover mb-4"
                     />
                   ) : (
                     <div className="h-20 w-20 rounded-full bg-gradient-to-br from-mint to-gold mb-4 flex items-center justify-center text-2xl font-bold text-ink">
-                      {profile.displayName[0].toUpperCase()}
+                      {(profile.displayName?.[0] || '?').toUpperCase()}
                     </div>
                   )}
                   <h3 className="text-xl font-semibold text-white mb-1">
@@ -171,28 +254,51 @@ export default function ExplorePage() {
                     {profile.bio}
                   </p>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    {profile.acceptedAssets.slice(0, 3).map((asset, idx) => (
+                    {profile.acceptedAssets.slice(0, 3).map((a, idx) => (
                       <span
                         key={idx}
-                        className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-mint/20 text-mint"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-mint/20 text-mint"
+                        title={a.issuer ? `Issuer: ${a.issuer}` : a.code}
                       >
-                        {asset.code}
+                        {a.code}
+                        {a.issuer && (
+                          <span className="text-mint/50 font-normal">
+                            {a.issuer.slice(0, 4)}…{a.issuer.slice(-4)}
+                          </span>
+                        )}
                       </span>
                     ))}
+                    {profile.acceptedAssets.length > 3 && (
+                      <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-white/10 text-sky/60">
+                        +{profile.acceptedAssets.length - 3}
+                      </span>
+                    )}
                   </div>
                 </Link>
               ))}
             </div>
 
-            {/* Load More button */}
+            {/* Infinite scroll sentinel */}
             {hasMore && profiles.length > 0 && (
-              <div className="mt-8 text-center">
+              <div ref={sentinelRef} className="mt-8 text-center py-4">
+                {loading && (
+                  <div className="flex items-center justify-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-mint animate-pulse" />
+                    <div className="h-2 w-2 rounded-full bg-mint animate-pulse delay-75" />
+                    <div className="h-2 w-2 rounded-full bg-mint animate-pulse delay-150" />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Fallback Load More button */}
+            {hasMore && profiles.length > 0 && !loading && (
+              <div className="mt-4 text-center">
                 <button
                   onClick={handleLoadMore}
-                  disabled={loading}
-                  className="rounded-full bg-mint px-6 py-3 text-sm font-semibold text-ink transition hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="rounded-full bg-mint/20 border border-mint/30 px-6 py-2 text-sm font-medium text-mint transition hover:bg-mint/30"
                 >
-                  {loading ? "Loading..." : "Load More"}
+                  Load More
                 </button>
               </div>
             )}
@@ -204,9 +310,13 @@ export default function ExplorePage() {
             )}
 
             {profiles.length === 0 && !loading && !error && (
-              <div className="text-center py-12">
-                <p className="text-sky/70">No profiles found</p>
-              </div>
+              <EmptyState
+                variant="no-results"
+                title="No creators matched your search."
+                description="Try adjusting your search filters or check back later."
+                ctaLabel="Explore Creators"
+                ctaHref="/explore"
+              />
             )}
           </>
         ) : null}

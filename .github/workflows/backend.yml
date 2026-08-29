@@ -1,7 +1,7 @@
 name: Backend CI
 
 on:
-  pull_request_target:
+  pull_request:
     paths:
       - "backend/**"
       - ".github/workflows/backend.yml"
@@ -45,27 +45,68 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20.x
+          node-version: 22.x
           cache: npm
           cache-dependency-path: backend/package-lock.json
 
       - name: Install backend dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: Generate Prisma client
         run: npm run db:generate
 
+      - name: Validate Prisma schema
+        run: npx prisma validate
+
       - name: Apply database migrations
         run: npm run db:migrate:deploy
+
+      - name: Validate database migrations
+        run: |
+          set +e
+          DRIFT=$(npx prisma migrate diff \
+            --from-schema-datamodel prisma/schema.prisma \
+            --to-migrations prisma/migrations \
+            --shadow-database-url "$DATABASE_URL" \
+            --exit-code 2>&1)
+          DRIFT_EXIT=$?
+          set -e
+          echo "::group::Schema drift diff output"
+          echo "$DRIFT"
+          echo "::endgroup::"
+          if [ $DRIFT_EXIT -ne 0 ]; then
+            echo ""
+            echo "============================================"
+            echo "  ❌ MIGRATION VALIDATION FAILED"
+            echo "============================================"
+            echo ""
+            echo "  Drift detected — see diff output above."
+            echo ""
+            echo "  To fix: create a new migration:"
+            echo "    cd backend"
+            echo "    npx prisma migrate dev --name describe_your_changes"
+            echo ""
+            exit 1
+          fi
+          echo "✅ Schema and migrations are in sync."
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
 
       - name: Run backend tests
         run: npm run test
 
       - name: Build backend
         run: npm run build
+
+      - name: Upload source maps to Sentry
+        if: github.ref == 'refs/heads/main' && secrets.SENTRY_AUTH_TOKEN != ''
+        run: npx @sentry/cli releases files "$SENTRY_RELEASE" upload-sourcemaps ./dist
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: novasupport
+          SENTRY_PROJECT: novasupport-backend
+          SENTRY_RELEASE: ${{ github.sha }}

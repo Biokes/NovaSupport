@@ -1,0 +1,13 @@
+-- #601: Make WebhookDelivery.nextRetryAt nullable.
+--
+-- When a delivery fails permanently (willRetry = false), the processor should
+-- write NULL to nextRetryAt to signal "no retry scheduled." With the column
+-- NOT NULL, Prisma omits the field update when the value is undefined, leaving
+-- the stale timestamp from the previous attempt in place.
+--
+-- Making the column nullable lets the processor set nextRetryAt = NULL
+-- explicitly on permanent failure. The processor's pending-delivery query
+-- (WHERE status = 'pending' AND nextRetryAt <= now) already excludes failed
+-- rows by status, but writing NULL removes any ambiguity and keeps the DB
+-- consistent with the business state.
+ALTER TABLE "WebhookDelivery" ALTER COLUMN "nextRetryAt" DROP NOT NULL;

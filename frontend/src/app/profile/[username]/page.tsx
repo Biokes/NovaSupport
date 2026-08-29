@@ -1,10 +1,21 @@
 import { notFound } from "next/navigation";
+import { headers } from "next/headers";
 import type { Metadata } from "next";
 import { AppShell } from "@/components/app-shell";
 import { ProfileCard } from "@/components/profile-card";
 import { SupportPanel } from "@/components/support-panel";
 import { ProfileTabs } from "@/components/profile-tabs";
-import { API_BASE_URL } from "@/lib/config";
+import { QRCodeButton } from "@/components/qr-code-button";
+import { RSSFeedButton } from "@/components/rss-feed-button";
+import { ShareButton } from "@/components/share-button";
+import { EmptyState } from "@/components/empty-state";
+import { EmbedCodeGenerator } from "@/components/embed-widget";
+import { MilestoneCard } from "@/components/milestone-card";
+import { ActivityFeed } from "@/components/activity-feed";
+import { EditProfileButton } from "@/components/edit-profile-button";
+import { ReportProfileModal } from "@/components/report-profile-modal";
+import { API_BASE_URL, SITE_URL } from "@/lib/config";
+import { stellarExpertUrl } from "@/lib/stellar";
 
 type PageProps = {
   params: {
@@ -19,7 +30,11 @@ type Profile = {
   bio: string;
   walletAddress: string;
   avatarUrl?: string | null;
+  websiteUrl?: string | null;
+  twitterHandle?: string | null;
+  githubHandle?: string | null;
   acceptedAssets: Array<{ code: string; issuer?: string | null }>;
+  emailVerified?: boolean;
 };
 
 type SupportTx = {
@@ -28,7 +43,7 @@ type SupportTx = {
   assetCode: string;
   message?: string | null;
   createdAt: string;
-  senderAddress: string;
+  supporterAddress: string | null;
 };
 
 type Milestone = {
@@ -40,7 +55,16 @@ type Milestone = {
   assetCode: string;
   status: string;
   createdAt: string;
-    }
+};
+
+type Badge = {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  awardedAt: string;
+};
+
 type LeaderboardEntry = {
   rank: number;
   supporterAddress: string;
@@ -48,19 +72,19 @@ type LeaderboardEntry = {
   assetCode: string;
 };
 
+type ProfileStats = {
+  totalTransactions: number;
+  uniqueSupporters: number;
+  assetTotals: Array<{ assetCode: string; total: string }>;
+};
+
 async function getProfile(username: string): Promise<Profile> {
-  // Use a cache-busting or lower revalidation for profile page
   const res = await fetch(`${API_BASE_URL}/profiles/${username}`, {
     next: { revalidate: 10 },
   });
 
-  if (res.status === 404) {
-    notFound();
-  }
-
-  if (!res.ok) {
-    throw new Error("Failed to fetch profile");
-  }
+  if (res.status === 404) notFound();
+  if (!res.ok) throw new Error("Failed to fetch profile");
 
   return res.json();
 }
@@ -75,9 +99,7 @@ export async function generateMetadata({
   });
 
   if (!res.ok) {
-    return {
-      title: "Profile not found — NovaSupport",
-    };
+    return { title: "Profile not found — NovaSupport" };
   }
 
   const profile: Profile = await res.json();
@@ -87,33 +109,29 @@ export async function generateMetadata({
     description: profile.bio ?? `Support ${profile.displayName} on NovaSupport`,
     openGraph: {
       title: `${profile.displayName} on NovaSupport`,
-      description:
-        profile.bio ?? `Support ${profile.displayName} on NovaSupport`,
-      images: profile.avatarUrl ? [profile.avatarUrl] : [],
-      url: `https://novasupport.xyz/profile/${params.username}`,
+      description: profile.bio ?? `Support ${profile.displayName} on NovaSupport`,
+      url: `${SITE_URL}/profile/${params.username}`,
       type: "profile",
     },
     twitter: {
-      card: "summary",
+      card: "summary_large_image",
       title: `${profile.displayName} on NovaSupport`,
-      description:
-        profile.bio ?? `Support ${profile.displayName} on NovaSupport`,
-      images: profile.avatarUrl ? [profile.avatarUrl] : [],
+      description: profile.bio ?? `Support ${profile.displayName} on NovaSupport`,
+    },
+    alternates: {
+      types: {
+        "application/rss+xml": `${API_BASE_URL}/profiles/${params.username}/feed.xml`,
+      },
     },
   };
 }
 
-async function getTransactions(
-  username: string,
-  limit = 10,
-): Promise<SupportTx[]> {
+async function getTransactions(username: string, limit = 10): Promise<SupportTx[]> {
   const res = await fetch(
     `${API_BASE_URL}/profiles/${username}/transactions?limit=${limit}`,
     { next: { revalidate: 60 } },
   );
-
   if (!res.ok) return [];
-
   const body = await res.json();
   return body.transactions ?? [];
 }
@@ -127,22 +145,17 @@ async function getLeaderboard(username: string): Promise<LeaderboardEntry[]> {
   const res = await fetch(`${API_BASE_URL}/profiles/${username}/leaderboard`, {
     next: { revalidate: 60 },
   });
-
   if (!res.ok) return [];
 
   const body = (await res.json()) as {
     leaderboard?: Array<Record<string, unknown>>;
   };
 
-  const source = body.leaderboard ?? [];
-  return source
+  return (body.leaderboard ?? [])
     .slice(0, 5)
     .map((entry, index) => {
       const address = String(
-        entry.supporterAddress ??
-          entry.supporter_address ??
-          entry.address ??
-          "",
+        entry.supporterAddress ?? entry.supporter_address ?? entry.address ?? "",
       );
       const amount = String(
         entry.totalAmount ?? entry.total_amount ?? entry.amount ?? "0",
@@ -151,12 +164,8 @@ async function getLeaderboard(username: string): Promise<LeaderboardEntry[]> {
         entry.assetCode ?? entry.asset_code ?? entry.asset ?? "XLM",
       );
       const rankFromApi = Number(entry.rank);
-
       return {
-        rank:
-          Number.isFinite(rankFromApi) && rankFromApi > 0
-            ? rankFromApi
-            : index + 1,
+        rank: Number.isFinite(rankFromApi) && rankFromApi > 0 ? rankFromApi : index + 1,
         supporterAddress: address,
         totalAmount: amount,
         assetCode,
@@ -165,104 +174,165 @@ async function getLeaderboard(username: string): Promise<LeaderboardEntry[]> {
     .filter((entry) => entry.supporterAddress.length > 0);
 }
 
-type ProfileStats = {
-  totalTransactions: number;
-  uniqueSupporters: number;
-  assetTotals: Array<{ assetCode: string; total: string }>;
-};
-
 async function getStats(username: string): Promise<ProfileStats | null> {
   const res = await fetch(`${API_BASE_URL}/profiles/${username}/stats`, {
-    next: { revalidate: 60 }
+    next: { revalidate: 60 },
   });
   if (!res.ok) return null;
   return res.json();
 }
 
-export default async function ProfilePage({ params }: PageProps) {
-  const [profile, transactions, leaderboard, stats] = await Promise.all([
-    getProfile(params.username),
-    getTransactions(params.username, 10),
-    getLeaderboard(params.username),
-    getStats(params.username),
-  ]);
+async function getMilestones(username: string): Promise<Milestone[]> {
+  const res = await fetch(`${API_BASE_URL}/profiles/${username}/milestones`, {
+    next: { revalidate: 60 },
+  });
+  if (!res.ok) return [];
+  const body = await res.json();
+  return body.milestones ?? body ?? [];
+}
 
-  const activeMilestones = milestones.filter((m) => m.status === "active");
+async function getBadges(username: string): Promise<Badge[]> {
+  const res = await fetch(`${API_BASE_URL}/profiles/${username}/badges`, {
+    next: { revalidate: 60 },
+  });
+  if (!res.ok) return [];
+  const body = await res.json();
+  return body.badges ?? [];
+}
+
+export default async function ProfilePage({ params }: PageProps) {
+  const [profile, transactions, leaderboard, stats, milestones, badges] =
+    await Promise.all([
+      getProfile(params.username),
+      getTransactions(params.username, 10),
+      getLeaderboard(params.username),
+      getStats(params.username),
+      getMilestones(params.username),
+      getBadges(params.username),
+    ]);
+
+  const visibleMilestones = milestones.filter(
+    (m) => m.status === "active" || m.status === "reached",
+  );
+
+  const activeMilestone = visibleMilestones.find((m) => m.status === "active");
+  const milestoneProgress = activeMilestone
+    ? (() => {
+        const target = parseFloat(activeMilestone.targetAmount);
+        const current = parseFloat(activeMilestone.currentAmount);
+        return target > 0
+          ? Math.min(100, Math.round((current / target) * 100))
+          : null;
+      })()
+    : null;
+
+  const sameAs = [
+    profile.websiteUrl,
+    profile.twitterHandle
+      ? `https://twitter.com/${profile.twitterHandle.replace(/^@/, "")}`
+      : null,
+    profile.githubHandle
+      ? `https://github.com/${profile.githubHandle.replace(/^@/, "")}`
+      : null,
+  ].filter(Boolean) as string[];
+
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "ProfilePage",
+    "mainEntity": {
+      "@type": "Person",
+      "name": profile.displayName,
+      "alternateName": profile.username,
+      "description": profile.bio || undefined,
+      "image": profile.avatarUrl || undefined,
+      "url": `${SITE_URL}/profile/${profile.username}`,
+      "identifier": profile.walletAddress,
+      ...(sameAs.length > 0 ? { sameAs } : {}),
+    },
+  };
+
+  const nonce = headers().get("x-csp-nonce") ?? undefined;
 
   return (
     <AppShell>
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8 items-start">
+      <script
+        type="application/ld+json"
+        nonce={nonce}
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-8 items-start animate-fade-in">
         <div className="space-y-12">
-          <ProfileCard
-            username={profile.username}
-            displayName={profile.displayName}
-            bio={profile.bio}
-            walletAddress={profile.walletAddress}
-            acceptedAssets={profile.acceptedAssets}
-            avatarUrl={profile.avatarUrl || undefined}
-            stats={stats || undefined}
-          />
+          <div className="space-y-3">
+            <ProfileCard
+              username={profile.username}
+              displayName={profile.displayName}
+              bio={profile.bio}
+              walletAddress={profile.walletAddress}
+              acceptedAssets={profile.acceptedAssets}
+              avatarUrl={profile.avatarUrl || undefined}
+              isVerified={profile.emailVerified}
+              stats={stats || undefined}
+            />
+            <div className="px-2 flex gap-2">
+              <QRCodeButton username={profile.username} />
+              <RSSFeedButton username={profile.username} />
+              <ShareButton displayName={profile.displayName} username={profile.username} />
+              <EditProfileButton username={profile.username} walletAddress={profile.walletAddress} />
+              <ReportProfileModal username={profile.username} displayName={profile.displayName} />
+            </div>
+          </div>
 
-          {activeMilestones.length > 0 && (
+          {badges.length > 0 && (
+            <div className="px-2">
+              <h3 className="text-sm font-semibold uppercase tracking-widest text-steel mb-3">
+                Badges
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {badges.slice(0, 6).map((badge) => (
+                  <div
+                    key={badge.id}
+                    title={badge.name}
+                    className="flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-sm hover:bg-white/10 transition-colors cursor-default"
+                  >
+                    <span>{badge.icon}</span>
+                    <span className="text-xs text-steel">{badge.name}</span>
+                  </div>
+                ))}
+                {badges.length > 6 && (
+                  <div className="flex items-center rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-steel">
+                    +{badges.length - 6} more
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {visibleMilestones.length > 0 && (
             <div className="px-2 space-y-4">
               <h3 className="text-sm font-semibold uppercase tracking-widest text-steel">
                 Funding Goals
               </h3>
               <div className="space-y-4">
-                {activeMilestones.map((milestone) => {
-                  const progress = Math.min(
-                    (parseFloat(milestone.currentAmount) / parseFloat(milestone.targetAmount)) * 100,
-                    100
-                  );
-                  const isReached = milestone.status === "reached" || progress >= 100;
-
-                  return (
-                    <div
-                      key={milestone.id}
-                      className="rounded-2xl border border-white/10 bg-white/5 p-4"
-                    >
-                      <div className="flex items-start justify-between gap-2 mb-3">
-                        <div className="flex-1 min-w-0">
-                          <h4 className="text-sm font-semibold text-white truncate">
-                            {milestone.title}
-                          </h4>
-                          {milestone.description && (
-                            <p className="text-xs text-steel mt-1 line-clamp-2">
-                              {milestone.description}
-                            </p>
-                          )}
-                        </div>
-                        {isReached && (
-                          <span className="text-xs font-bold text-mint whitespace-nowrap">
-                            Reached ✓
-                          </span>
-                        )}
-                      </div>
-                      <div className="space-y-2">
-                        <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden">
-                          <div
-                            className="bg-mint h-full transition-all"
-                            style={{ width: `${progress}%` }}
-                          />
-                        </div>
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="text-steel">
-                            {parseFloat(milestone.currentAmount).toFixed(2)} / {parseFloat(milestone.targetAmount).toFixed(2)} {milestone.assetCode}
-                          </span>
-                          <span className="text-steel">
-                            {Math.round(progress)}%
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                {visibleMilestones.map((milestone, i) => (
+                  <MilestoneCard key={milestone.id} milestone={milestone} index={i} />
+                ))}
               </div>
             </div>
           )}
-          
+
+          <div className="px-2">
+            <h3 className="text-sm font-semibold uppercase tracking-widest text-steel mb-4">
+              Activity Feed
+            </h3>
+            <ActivityFeed username={profile.username} limit={8} />
+          </div>
+
           <div className="px-2">
             <ProfileTabs username={profile.username} />
+          </div>
+
+          <div className="px-2">
+            <EmbedCodeGenerator username={profile.username} />
           </div>
         </div>
 
@@ -271,9 +341,10 @@ export default async function ProfilePage({ params }: PageProps) {
             walletAddress={profile.walletAddress}
             acceptedAssets={profile.acceptedAssets}
             profileId={profile.id}
+            recipientDisplayName={profile.displayName}
           />
 
-          {leaderboard.length > 0 && (
+          {leaderboard.length > 0 ? (
             <div className="mt-6 rounded-3xl border border-white/5 bg-white/[0.02] p-6">
               <h4 className="text-[10px] uppercase tracking-[0.25em] text-steel font-bold mb-4">
                 Top Supporters
@@ -286,7 +357,7 @@ export default async function ProfilePage({ params }: PageProps) {
                   >
                     <span className="text-xs text-sky/70">#{entry.rank}</span>
                     <a
-                      href={`https://stellar.expert/explorer/testnet/account/${entry.supporterAddress}`}
+                      href={stellarExpertUrl("account", entry.supporterAddress)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="font-mono text-xs text-white hover:text-mint transition-colors"
@@ -300,6 +371,16 @@ export default async function ProfilePage({ params }: PageProps) {
                 ))}
               </div>
             </div>
+          ) : (
+            <div className="mt-6">
+              <EmptyState
+                variant="no-supporters"
+                title="Be the first to support this creator."
+                description="This profile hasn't received support yet."
+                ctaLabel="Support Creator"
+                ctaHref={`/profile/${profile.username}`}
+              />
+            </div>
           )}
 
           <div className="mt-6 rounded-3xl border border-white/5 bg-white/[0.02] p-6">
@@ -309,18 +390,30 @@ export default async function ProfilePage({ params }: PageProps) {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-sky/60">Total Raised</span>
-                <span className="text-sm font-bold text-white">12.4k XLM</span>
+                <span className="text-sm font-bold text-white">
+                  {stats?.assetTotals?.[0]?.total || "0"}{" "}
+                  {stats?.assetTotals?.[0]?.assetCode || "XLM"}
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-sky/60">Supporters</span>
-                <span className="text-sm font-bold text-white">142</span>
+                <span className="text-sm font-bold text-white">
+                  {stats?.uniqueSupporters || 0}
+                </span>
               </div>
-              <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden mt-2">
-                <div className="bg-mint h-full w-[65%]" />
-              </div>
-              <p className="text-[10px] text-steel text-center italic">
-                65% of monthly goal reached
-              </p>
+              {milestoneProgress !== null && (
+                <>
+                  <div className="w-full bg-white/5 h-1.5 rounded-full overflow-hidden mt-2">
+                    <div
+                      className="bg-mint h-full transition-all"
+                      style={{ width: `${milestoneProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-steel text-center italic">
+                    {milestoneProgress}% of goal reached
+                  </p>
+                </>
+              )}
             </div>
           </div>
         </aside>

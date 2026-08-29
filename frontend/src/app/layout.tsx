@@ -1,20 +1,56 @@
 import type { Metadata } from "next";
+import { SITE_URL } from "@/lib/config";
+import { Providers } from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "NovaSupport",
-  description: "Stellar-native support profiles for maintainers, creators, and developers."
+  description:
+    "Stellar-native support profiles for maintainers, creators, and developers.",
+  // #774: PWA manifest and theme color
+  manifest: "/manifest.json",
+  themeColor: "#00e5be",
+  openGraph: {
+    title: "NovaSupport",
+    description:
+      "Stellar-native support profiles for maintainers, creators, and developers.",
+    url: SITE_URL,
+    siteName: "NovaSupport",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "NovaSupport",
+    description:
+      "Stellar-native support profiles for maintainers, creators, and developers.",
+  },
 };
 
 export default function RootLayout({
-  children
+  children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                const stored = localStorage.getItem('theme');
+                const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                const theme = stored || (prefersDark ? 'dark' : 'light');
+                document.documentElement.classList.toggle('dark', theme === 'dark');
+              })();
+            `,
+          }}
+        />
+      </head>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }
-

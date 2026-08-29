@@ -2,14 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
+import { Toast } from "@/components/toast";
+import { OnboardingChecklist } from "@/components/onboarding-checklist";
 import { 
   TrendingUp, Users, Wallet, Activity, 
-  ArrowUpRight, ArrowDownRight, Plus, Edit2, Trash2, X
+  ArrowUpRight, ArrowDownRight, Plus, Edit2, Trash2, X, Link2, Eye, EyeOff, Copy, Check, ChevronDown, ChevronRight, Download
 } from "lucide-react";
 import { motion } from "framer-motion";
-
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:4000";
+import { formatRateLimitedMessage, parseRateLimitInfo } from "@/lib/rate-limit";
+import { apiFetch } from "@/lib/api-client";
+import { API_BASE_URL } from "@/lib/config";
 
 interface Stats {
   totalEarned: number;
@@ -25,6 +29,7 @@ interface Milestone {
   targetAmount: string;
   currentAmount: string;
   assetCode: string;
+  assetIssuer?: string | null;
   status: string;
   createdAt: string;
 }
@@ -34,6 +39,28 @@ interface MilestoneFormData {
   description: string;
   targetAmount: string;
   assetCode: string;
+  assetIssuer: string | null;
+}
+
+interface AcceptedAsset {
+  code: string;
+  issuer?: string | null;
+}
+
+interface Webhook {
+  id: string;
+  url: string;
+  secret: string;
+  active: boolean;
+  createdAt: string;
+}
+
+interface WebhookDelivery {
+  id: string;
+  event: string;
+  status: string;
+  statusCode: number | null;
+  createdAt: string;
 }
 
 export default function DashboardPage() {
@@ -50,9 +77,25 @@ export default function DashboardPage() {
     description: "",
     targetAmount: "",
     assetCode: "XLM",
+    assetIssuer: null,
   });
+  const [acceptedAssets, setAcceptedAssets] = useState<AcceptedAsset[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  const [webhooks, setWebhooks] = useState<Webhook[]>([]);
+  const [showWebhookForm, setShowWebhookForm] = useState(false);
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookSubmitting, setWebhookSubmitting] = useState(false);
+  const [newWebhookSecret, setNewWebhookSecret] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [webhookDeleteConfirm, setWebhookDeleteConfirm] = useState<string | null>(null);
+  const [expandedDeliveries, setExpandedDeliveries] = useState<string | null>(null);
+  const [deliveries, setDeliveries] = useState<Record<string, WebhookDelivery[]>>({});
+  const [deliveriesLoading, setDeliveriesLoading] = useState<string | null>(null);
+  const [csvLoading, setCsvLoading] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [embedCopied, setEmbedCopied] = useState(false);
 
   useEffect(() => {
     async function loadDashboard() {
@@ -66,9 +109,11 @@ export default function DashboardPage() {
 
         setUsername(storedUsername);
 
-        const [statsRes, milestonesRes] = await Promise.all([
-          fetch(`${API_BASE_URL}/profiles/${storedUsername}/stats`),
-          fetch(`${API_BASE_URL}/profiles/${storedUsername}/milestones`),
+        const [statsRes, milestonesRes, webhooksRes, profileRes] = await Promise.all([
+          apiFetch(`${API_BASE_URL}/profiles/${storedUsername}/stats`),
+          apiFetch(`${API_BASE_URL}/profiles/${storedUsername}/milestones`),
+          apiFetch(`${API_BASE_URL}/profiles/${storedUsername}/webhooks`),
+          apiFetch(`${API_BASE_URL}/profiles/${storedUsername}`),
         ]);
 
         if (statsRes.ok) {
@@ -79,6 +124,16 @@ export default function DashboardPage() {
         if (milestonesRes.ok) {
           const milestonesData = await milestonesRes.json();
           setMilestones(milestonesData.milestones || []);
+        }
+
+        if (webhooksRes.ok) {
+          const webhooksData = await webhooksRes.json();
+          setWebhooks(webhooksData.webhooks || []);
+        }
+
+        if (profileRes.ok) {
+          const profileData = await profileRes.json();
+          setAcceptedAssets(profileData.acceptedAssets || []);
         }
       } catch (err: any) {
         setError(err.message);
@@ -92,7 +147,7 @@ export default function DashboardPage() {
 
   const handleAddMilestone = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username || !formData.title || !formData.targetAmount) return;
+    if (!username || !formData.title.trim() || !formData.targetAmount) return;
 
     setSubmitting(true);
     try {
@@ -101,7 +156,7 @@ export default function DashboardPage() {
         ? `${API_BASE_URL}/profiles/${username}/milestones/${editingMilestone.id}`
         : `${API_BASE_URL}/profiles/${username}/milestones`;
 
-      const res = await fetch(url, {
+      const res = await apiFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -109,10 +164,17 @@ export default function DashboardPage() {
           description: formData.description || null,
           targetAmount: formData.targetAmount,
           assetCode: formData.assetCode,
+          assetIssuer: formData.assetIssuer,
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to save milestone");
+      if (!res.ok) {
+        if (res.status === 429) {
+          alert(formatRateLimitedMessage(parseRateLimitInfo(res.headers)));
+          return;
+        }
+        throw new Error("Failed to save milestone");
+      }
 
       const newMilestone = await res.json();
 
@@ -122,7 +184,7 @@ export default function DashboardPage() {
         setMilestones([newMilestone, ...milestones]);
       }
 
-      setFormData({ title: "", description: "", targetAmount: "", assetCode: "XLM" });
+      setFormData({ title: "", description: "", targetAmount: "", assetCode: "XLM", assetIssuer: null });
       setShowMilestoneForm(false);
       setEditingMilestone(null);
     } catch (err: any) {
@@ -139,6 +201,7 @@ export default function DashboardPage() {
       description: milestone.description || "",
       targetAmount: milestone.targetAmount,
       assetCode: milestone.assetCode,
+      assetIssuer: milestone.assetIssuer ?? null,
     });
     setShowMilestoneForm(true);
   };
@@ -147,12 +210,18 @@ export default function DashboardPage() {
     if (!username) return;
 
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `${API_BASE_URL}/profiles/${username}/milestones/${milestoneId}`,
         { method: "DELETE" }
       );
 
-      if (!res.ok) throw new Error("Failed to delete milestone");
+      if (!res.ok) {
+        if (res.status === 429) {
+          alert(formatRateLimitedMessage(parseRateLimitInfo(res.headers)));
+          return;
+        }
+        throw new Error("Failed to delete milestone");
+      }
 
       setMilestones(milestones.filter((m) => m.id !== milestoneId));
       setDeleteConfirm(null);
@@ -164,7 +233,141 @@ export default function DashboardPage() {
   const cancelForm = () => {
     setShowMilestoneForm(false);
     setEditingMilestone(null);
-    setFormData({ title: "", description: "", targetAmount: "", assetCode: "XLM" });
+    setFormData({ title: "", description: "", targetAmount: "", assetCode: "XLM", assetIssuer: null });
+  };
+
+  const handleAddWebhook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!username || !webhookUrl) return;
+
+    setWebhookSubmitting(true);
+    try {
+      const res = await apiFetch(`${API_BASE_URL}/profiles/${username}/webhooks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: webhookUrl }),
+      });
+
+      if (!res.ok) throw new Error("Failed to add webhook");
+
+      const newWebhook = await res.json();
+      setWebhooks([newWebhook, ...webhooks]);
+      setNewWebhookSecret(newWebhook.secret);
+      setWebhookUrl("");
+      setShowWebhookForm(false);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setWebhookSubmitting(false);
+    }
+  };
+
+  const handleDeleteWebhook = async (webhookId: string) => {
+    if (!username) return;
+
+    try {
+      const res = await apiFetch(
+        `${API_BASE_URL}/profiles/${username}/webhooks/${webhookId}`,
+        { method: "DELETE" }
+      );
+
+      if (!res.ok) throw new Error("Failed to delete webhook");
+
+      setWebhooks(webhooks.filter((w) => w.id !== webhookId));
+      setWebhookDeleteConfirm(null);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleToggleDeliveries = async (webhookId: string) => {
+    if (expandedDeliveries === webhookId) {
+      setExpandedDeliveries(null);
+      return;
+    }
+
+    setExpandedDeliveries(webhookId);
+    if (!deliveries[webhookId]) {
+      setDeliveriesLoading(webhookId);
+      try {
+        const res = await apiFetch(
+          `${API_BASE_URL}/profiles/${username}/webhooks/${webhookId}/deliveries`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setDeliveries((prev) => ({ ...prev, [webhookId]: data.deliveries || [] }));
+        }
+      } catch {
+        // silently fail
+      } finally {
+        setDeliveriesLoading(null);
+      }
+    }
+  };
+
+  const handleCopySecret = async (secret: string) => {
+    try {
+      await navigator.clipboard.writeText(secret);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // fallback
+      const textarea = document.createElement("textarea");
+      textarea.value = secret;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  const handleDownloadCsv = async () => {
+    if (!username) return;
+    setCsvLoading(true);
+    try {
+      const res = await apiFetch(`${API_BASE_URL}/profiles/${username}/transactions/export`);
+
+      if (!res.ok) {
+        throw new Error("Failed to download CSV");
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `novasupport-transactions-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setToast({ message: err.message || "Failed to download CSV", type: "error" });
+    } finally {
+      setCsvLoading(false);
+    }
+  };
+
+  const getEmbedCode = (user: string) => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return `<iframe\n  src="${origin}/embed/${user}"\n  width="400"\n  height="320"\n  frameborder="0"\n  style="border-radius:16px"\n></iframe>`;
+  };
+
+  const handleCopyEmbed = async () => {
+    if (!username) return;
+    const code = getEmbedCode(username);
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = code;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+    setEmbedCopied(true);
+    setToast({ message: "Embed code copied to clipboard!", type: "success" });
+    setTimeout(() => setEmbedCopied(false), 2000);
   };
 
   if (loading) {
@@ -187,6 +390,37 @@ export default function DashboardPage() {
     );
   }
 
+  // Build the asset dropdown from the profile's actual accepted assets so a
+  // creator can only pick what they actually accept. Fall back to the default
+  // assets when none are configured. Always ensure the currently-selected
+  // asset (e.g. one being edited) is present in the list.
+  const assetOptions: AcceptedAsset[] = (() => {
+    const base: AcceptedAsset[] =
+      acceptedAssets.length > 0
+        ? acceptedAssets
+        : [
+            { code: "XLM", issuer: null },
+            { code: "USDC", issuer: null },
+            { code: "AQUA", issuer: null },
+          ];
+    const exists = base.some(
+      (a) => a.code === formData.assetCode && (a.issuer ?? "") === (formData.assetIssuer ?? ""),
+    );
+    if (!exists && formData.assetCode) {
+      return [...base, { code: formData.assetCode, issuer: formData.assetIssuer }];
+    }
+    return base;
+  })();
+
+  const selectedAssetIndex = assetOptions.findIndex(
+    (a) => a.code === formData.assetCode && (a.issuer ?? "") === (formData.assetIssuer ?? ""),
+  );
+
+  const renderAssetLabel = (a: AcceptedAsset) =>
+    a.issuer
+      ? `${a.code} (${a.issuer.slice(0, 4)}…${a.issuer.slice(-4)})`
+      : a.code;
+
   return (
     <AppShell>
       <div className="mx-auto max-w-7xl space-y-8">
@@ -194,14 +428,28 @@ export default function DashboardPage() {
           <h1 className="text-3xl font-bold tracking-tight text-white">
             Creator <span className="text-mint">Dashboard</span>
           </h1>
-          <p className="text-steel">
-            Manage your profile and funding goals
-          </p>
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-steel">
+              Manage your profile and funding goals
+            </p>
+            {username && (
+              <Link
+                href={`/profile/${username}`}
+                className="shrink-0 text-sm text-sky/60 hover:text-mint transition-colors"
+              >
+                View public profile →
+              </Link>
+            )}
+          </div>
         </header>
+
+        {username && (
+          <OnboardingChecklist username={username} milestoneCount={milestones.length} />
+        )}
 
         {/* Summary Cards */}
         {stats && (
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
             <StatCard 
               title="Total Earned" 
               value={`${stats.totalEarned.toLocaleString(undefined, { maximumFractionDigits: 2 })} XLM`}
@@ -235,7 +483,7 @@ export default function DashboardPage() {
             {!showMilestoneForm && (
               <button
                 onClick={() => setShowMilestoneForm(true)}
-                className="flex items-center gap-2 rounded-lg bg-mint/10 px-3 py-2 text-xs font-semibold text-mint hover:bg-mint/20 transition-colors"
+                className="flex min-h-[44px] items-center gap-2 rounded-lg bg-mint/10 px-4 py-3 text-xs font-semibold text-mint hover:bg-mint/20 transition-colors"
               >
                 <Plus size={14} />
                 Add Goal
@@ -248,7 +496,7 @@ export default function DashboardPage() {
             <motion.div
               initial={{ opacity: 0, y: -10 }}
               animate={{ opacity: 1, y: 0 }}
-              className="rounded-2xl border border-white/10 bg-white/5 p-6"
+              className="rounded-2xl border border-white/10 bg-white/5 p-4 sm:p-6"
             >
               <form onSubmit={handleAddMilestone} className="space-y-4">
                 <div>
@@ -260,7 +508,7 @@ export default function DashboardPage() {
                     value={formData.title}
                     onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                     placeholder="e.g., Album Production"
-                    className="mt-2 w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white placeholder:text-steel/50 focus:outline-none focus:border-mint/50"
+                    className="mt-2 min-h-[44px] w-full rounded-lg bg-white/5 border border-white/10 px-3 py-3 text-sm text-white placeholder:text-steel/50 focus:outline-none focus:border-mint/50"
                     required
                   />
                 </div>
@@ -278,7 +526,7 @@ export default function DashboardPage() {
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <div>
                     <label className="text-xs font-semibold text-steel uppercase tracking-wider">
                       Target Amount *
@@ -289,7 +537,7 @@ export default function DashboardPage() {
                       value={formData.targetAmount}
                       onChange={(e) => setFormData({ ...formData, targetAmount: e.target.value })}
                       placeholder="1000"
-                      className="mt-2 w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white placeholder:text-steel/50 focus:outline-none focus:border-mint/50"
+                      className="mt-2 min-h-[44px] w-full rounded-lg bg-white/5 border border-white/10 px-3 py-3 text-sm text-white placeholder:text-steel/50 focus:outline-none focus:border-mint/50"
                       required
                     />
                   </div>
@@ -299,13 +547,22 @@ export default function DashboardPage() {
                       Asset
                     </label>
                     <select
-                      value={formData.assetCode}
-                      onChange={(e) => setFormData({ ...formData, assetCode: e.target.value })}
-                      className="mt-2 w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:border-mint/50"
+                      value={selectedAssetIndex < 0 ? "" : selectedAssetIndex}
+                      onChange={(e) => {
+                        const opt = assetOptions[Number(e.target.value)];
+                        setFormData({
+                          ...formData,
+                          assetCode: opt.code,
+                          assetIssuer: opt.issuer ?? null,
+                        });
+                      }}
+                      className="mt-2 min-h-[44px] w-full rounded-lg bg-white/5 border border-white/10 px-3 py-3 text-sm text-white focus:outline-none focus:border-mint/50"
                     >
-                      <option value="XLM">XLM</option>
-                      <option value="USDC">USDC</option>
-                      <option value="AQUA">AQUA</option>
+                      {assetOptions.map((a, i) => (
+                        <option key={i} value={i}>
+                          {renderAssetLabel(a)}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -314,14 +571,14 @@ export default function DashboardPage() {
                   <button
                     type="submit"
                     disabled={submitting}
-                    className="flex-1 rounded-lg bg-mint px-4 py-2 text-xs font-semibold text-black hover:bg-mint/90 transition-colors disabled:opacity-50"
+                    className="flex min-h-[44px] flex-1 items-center justify-center rounded-lg bg-mint px-4 py-3 text-xs font-semibold text-black hover:bg-mint/90 transition-colors disabled:opacity-50"
                   >
                     {submitting ? "Saving..." : editingMilestone ? "Update Goal" : "Create Goal"}
                   </button>
                   <button
                     type="button"
                     onClick={cancelForm}
-                    className="rounded-lg bg-white/5 px-4 py-2 text-xs font-semibold text-steel hover:bg-white/10 transition-colors"
+                    className="min-h-[44px] rounded-lg bg-white/5 px-4 py-3 text-xs font-semibold text-steel hover:bg-white/10 transition-colors"
                   >
                     Cancel
                   </button>
@@ -338,10 +595,14 @@ export default function DashboardPage() {
           ) : (
             <div className="space-y-3">
               {milestones.map((milestone) => {
-                const progress = Math.min(
-                  (parseFloat(milestone.currentAmount) / parseFloat(milestone.targetAmount)) * 100,
-                  100
-                );
+                const currentAmount = parseFloat(milestone.currentAmount);
+                const targetAmount = parseFloat(milestone.targetAmount);
+                const progress =
+                  Number.isFinite(currentAmount) &&
+                  Number.isFinite(targetAmount) &&
+                  targetAmount > 0
+                    ? Math.min((currentAmount / targetAmount) * 100, 100)
+                    : 0;
 
                 return (
                   <motion.div
@@ -364,14 +625,16 @@ export default function DashboardPage() {
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleEditMilestone(milestone)}
-                          className="rounded-lg bg-white/5 p-2 text-steel hover:bg-white/10 transition-colors"
+                          aria-label={`Edit milestone: ${milestone.title}`}
+                          className="min-h-[44px] min-w-[44px] rounded-lg bg-white/5 p-2 text-steel hover:bg-white/10 transition-colors"
                           title="Edit"
                         >
                           <Edit2 size={14} />
                         </button>
                         <button
                           onClick={() => setDeleteConfirm(milestone.id)}
-                          className="rounded-lg bg-white/5 p-2 text-red-400 hover:bg-red-500/10 transition-colors"
+                          aria-label={`Delete milestone: ${milestone.title}`}
+                          className="min-h-[44px] min-w-[44px] rounded-lg bg-white/5 p-2 text-red-400 hover:bg-red-500/10 transition-colors"
                           title="Delete"
                         >
                           <Trash2 size={14} />
@@ -421,7 +684,302 @@ export default function DashboardPage() {
             </div>
           )}
         </section>
+
+        {/* Webhooks Section */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-widest text-steel">
+              Webhooks
+            </h2>
+            {!showWebhookForm && (
+              <button
+                onClick={() => setShowWebhookForm(true)}
+                className="flex items-center gap-2 rounded-lg bg-mint/10 px-3 py-2 text-xs font-semibold text-mint hover:bg-mint/20 transition-colors"
+              >
+                <Plus size={14} />
+                Add Webhook
+              </button>
+            )}
+          </div>
+
+          {newWebhookSecret && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="rounded-2xl border border-gold/30 bg-gold/5 p-4"
+            >
+              <p className="text-xs font-bold text-gold uppercase tracking-wider">
+                Save this secret &mdash; it won&apos;t be shown again
+              </p>
+              <div className="mt-3 flex items-center gap-2">
+                <code className="flex-1 rounded-lg bg-ink/60 px-3 py-2 text-xs text-mint break-all font-mono">
+                  {newWebhookSecret}
+                </code>
+                <button
+                  onClick={() => handleCopySecret(newWebhookSecret)}
+                  className="rounded-lg bg-white/5 p-2 text-steel hover:bg-white/10 transition-colors"
+                  title="Copy secret"
+                >
+                  {copied ? <Check size={14} className="text-mint" /> : <Copy size={14} />}
+                </button>
+              </div>
+              <button
+                onClick={() => setNewWebhookSecret(null)}
+                className="mt-2 text-xs text-steel hover:text-white transition-colors"
+              >
+                Dismiss
+              </button>
+            </motion.div>
+          )}
+
+          {showWebhookForm && (
+            <motion.div
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="rounded-2xl border border-white/10 bg-white/5 p-6"
+            >
+              <form onSubmit={handleAddWebhook} className="space-y-4">
+                <div>
+                  <label className="text-xs font-semibold text-steel uppercase tracking-wider">
+                    Webhook URL *
+                  </label>
+                  <input
+                    type="url"
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    placeholder="https://example.com/webhook"
+                    pattern="https://.*"
+                    className="mt-2 w-full rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white placeholder:text-steel/50 focus:outline-none focus:border-mint/50"
+                    required
+                  />
+                  <p className="mt-1 text-[10px] text-steel">Must be an HTTPS URL</p>
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="submit"
+                    disabled={webhookSubmitting}
+                    className="flex-1 rounded-lg bg-mint px-4 py-2 text-xs font-semibold text-black hover:bg-mint/90 transition-colors disabled:opacity-50"
+                  >
+                    {webhookSubmitting ? "Adding..." : "Add Webhook"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowWebhookForm(false);
+                      setWebhookUrl("");
+                    }}
+                    className="rounded-lg bg-white/5 px-4 py-2 text-xs font-semibold text-steel hover:bg-white/10 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          )}
+
+          {webhooks.length === 0 && !showWebhookForm ? (
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-8 text-center">
+              <p className="text-sm text-steel">No webhooks configured. Add one to receive event notifications.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {webhooks.map((webhook) => {
+                const displayUrl = webhook.url.length > 50
+                  ? webhook.url.slice(0, 50) + "..."
+                  : webhook.url;
+
+                return (
+                  <motion.div
+                    key={webhook.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="rounded-2xl border border-white/10 bg-white/5 p-4 hover:bg-white/[0.08] transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-4 mb-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <Link2 size={14} className="text-steel shrink-0" />
+                          <h4 className="text-sm font-semibold text-white truncate" title={webhook.url}>
+                            {displayUrl}
+                          </h4>
+                        </div>
+                        <div className="flex items-center gap-3 mt-1">
+                          <span className={`inline-block w-1.5 h-1.5 rounded-full ${webhook.active ? "bg-mint" : "bg-steel"}`} />
+                          <span className="text-[10px] text-steel">
+                            {webhook.active ? "Active" : "Inactive"}
+                          </span>
+                          <span className="text-[10px] text-steel">
+                            Created {new Date(webhook.createdAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleToggleDeliveries(webhook.id)}
+                          aria-label={expandedDeliveries === webhook.id ? "Hide webhook deliveries" : "View webhook deliveries"}
+                          className="rounded-lg bg-white/5 p-2 text-steel hover:bg-white/10 transition-colors"
+                          title="View deliveries"
+                        >
+                          {expandedDeliveries === webhook.id ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                        <button
+                          onClick={() => setWebhookDeleteConfirm(webhook.id)}
+                          aria-label={`Delete webhook for ${webhook.url}`}
+                          className="rounded-lg bg-white/5 p-2 text-red-400 hover:bg-red-500/10 transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {webhookDeleteConfirm === webhook.id && (
+                      <div className="mb-3 rounded-lg bg-red-500/10 border border-red-500/20 p-3 flex items-center justify-between">
+                        <p className="text-xs text-red-400">Delete this webhook?</p>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleDeleteWebhook(webhook.id)}
+                            className="text-xs font-semibold text-red-400 hover:text-red-300"
+                          >
+                            Confirm
+                          </button>
+                          <button
+                            onClick={() => setWebhookDeleteConfirm(null)}
+                            className="text-xs font-semibold text-steel hover:text-white"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={() => handleToggleDeliveries(webhook.id)}
+                      className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-steel hover:text-white transition-colors"
+                    >
+                      {expandedDeliveries === webhook.id ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                      View deliveries
+                    </button>
+
+                    {expandedDeliveries === webhook.id && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: "auto" }}
+                        className="mt-3 space-y-2"
+                      >
+                        {deliveriesLoading === webhook.id ? (
+                          <p className="text-xs text-steel">Loading deliveries...</p>
+                        ) : deliveries[webhook.id]?.length > 0 ? (
+                          deliveries[webhook.id].map((delivery) => (
+                            <div
+                              key={delivery.id}
+                              className="flex items-center justify-between rounded-lg bg-white/[0.03] border border-white/5 px-3 py-2"
+                            >
+                              <div className="flex items-center gap-3">
+                                <span className={`inline-block w-1.5 h-1.5 rounded-full ${delivery.status === "success" ? "bg-mint" : "bg-red-400"}`} />
+                                <span className="text-xs text-white capitalize">{delivery.event}</span>
+                                <span className={`text-[10px] font-semibold uppercase ${delivery.status === "success" ? "text-mint" : "text-red-400"}`}>
+                                  {delivery.status}
+                                </span>
+                                {delivery.statusCode && (
+                                  <span className="text-[10px] text-steel">{delivery.statusCode}</span>
+                                )}
+                              </div>
+                              <span className="text-[10px] text-steel">
+                                {new Date(delivery.createdAt).toLocaleString()}
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-xs text-steel">No deliveries yet.</p>
+                        )}
+                      </motion.div>
+                    )}
+                  </motion.div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        {/* Embed Widget Section */}
+        <section className="space-y-4">
+          <h2 className="text-sm font-semibold uppercase tracking-widest text-steel">
+            Embed Your Widget
+          </h2>
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-6 space-y-4">
+            <p className="text-sm text-steel">
+              Copy the code below and paste it on your website to add your support widget.
+            </p>
+            <div className="relative">
+              <pre className="rounded-lg bg-ink/60 px-4 py-3 text-xs text-mint font-mono overflow-x-auto whitespace-pre-wrap break-all">
+                {username ? getEmbedCode(username) : ""}
+              </pre>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={handleCopyEmbed}
+                className="flex min-h-[44px] items-center gap-2 rounded-lg bg-mint/10 px-4 py-3 text-xs font-semibold text-mint hover:bg-mint/20 transition-colors"
+              >
+                {embedCopied ? <Check size={14} /> : <Copy size={14} />}
+                {embedCopied ? "Copied!" : "Copy code"}
+              </button>
+              {username && (
+                <a
+                  href={`/embed/${username}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex min-h-[44px] items-center gap-2 rounded-lg bg-white/5 px-4 py-3 text-xs font-semibold text-steel hover:bg-white/10 transition-colors"
+                >
+                  <Eye size={14} />
+                  Preview widget →
+                </a>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* Transactions Section */}
+        <section className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-widest text-steel">
+              Transactions
+            </h2>
+            <button
+              onClick={handleDownloadCsv}
+              disabled={csvLoading}
+              className="flex items-center gap-2 rounded-lg bg-mint/10 px-4 py-2 text-xs font-semibold text-mint hover:bg-mint/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {csvLoading ? (
+                <>
+                  <div className="h-3 w-3 animate-spin rounded-full border border-mint border-t-transparent" />
+                  Downloading...
+                </>
+              ) : (
+                <>
+                  <Download size={14} />
+                  Download CSV
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+            <p className="text-sm text-steel">
+              Download all your transactions as a CSV file for accounting and analysis purposes.
+            </p>
+          </div>
+        </section>
       </div>
+
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onDismiss={() => setToast(null)}
+        />
+      )}
     </AppShell>
   );
 }

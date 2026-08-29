@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import { Keypair } from "@stellar/stellar-sdk";
 import { app } from "./app.js";
 import { prisma } from "./db.js";
-import { signJWT } from "./auth.js";
+import { signJWT, generateChallenge, verifySignature } from "./auth.js";
 
 const baseUsername = "stellar-dev";
 const seedEmail = "builder@novasupport.dev";
@@ -11,7 +12,6 @@ const walletAddress = "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
 
 let baseUrl = "";
 let profileId = "";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 let userId = "";
 let server: ReturnType<typeof app.listen>;
 let authToken = "";
@@ -116,6 +116,13 @@ async function stopServer() {
   await prisma.$disconnect();
 }
 
+// Username suffixes from raw UUID can contain "010", "011", etc. which
+// triggers the confusing-pattern validator (3+ consecutive [l01O] chars).
+// Strip 0 and 1 to guarantee all generated usernames pass validation.
+function safeSuffix() {
+  return randomUUID().replace(/[01]/g, "a").slice(0, 8);
+}
+
 async function runTest(name: string, fn: () => Promise<void>) {
   try {
     await fn();
@@ -138,7 +145,7 @@ async function main() {
       assert.equal(body.ok, true);
       assert.equal(body.service, "NovaSupport backend");
       assert.equal(body.network, "Stellar Testnet");
-      assert.equal(body.database, "connected");
+      assert.equal(body.checks.database.status, "up");
     });
 
     await runTest("returns a seeded profile with accepted assets", async () => {
@@ -152,7 +159,37 @@ async function main() {
       assert.equal(profile.acceptedAssets.length, 2);
     });
 
-    await runTest("returns profile stats summary using only SUCCESS transactions", async () => {
+    await runTest("GET /profiles/:username exposes isOwner only for authenticated requests", async () => {
+      const unauthenticated = await fetch(`${baseUrl}/profiles/${baseUsername}`);
+      assert.equal(unauthenticated.status, 200);
+      const publicProfile = await unauthenticated.json();
+      assert.equal("isOwner" in publicProfile, false);
+
+      const ownerResponse = await fetch(`${baseUrl}/profiles/${baseUsername}`, {
+        headers: { authorization: `Bearer ${authToken}` },
+      });
+      assert.equal(ownerResponse.status, 200);
+      const ownerProfile = await ownerResponse.json();
+      assert.equal(ownerProfile.isOwner, true);
+
+      const otherUser = await prisma.user.create({
+        data: { email: `other-${randomUUID()}@example.com` },
+      });
+
+      try {
+        const otherToken = signJWT(Keypair.random().publicKey(), otherUser.id);
+        const otherResponse = await fetch(`${baseUrl}/profiles/${baseUsername}`, {
+          headers: { authorization: `Bearer ${otherToken}` },
+        });
+        assert.equal(otherResponse.status, 200);
+        const otherProfile = await otherResponse.json();
+        assert.equal(otherProfile.isOwner, false);
+      } finally {
+        await prisma.user.deleteMany({ where: { id: otherUser.id } });
+      }
+    });
+
+    await runTest("returns profile stats summary using all non-failed transactions", async () => {
       const supporterOne = `G${"B".repeat(55)}`;
       const supporterTwo = `G${"C".repeat(55)}`;
       const ignoredSupporter = `G${"D".repeat(55)}`;
@@ -207,15 +244,17 @@ async function main() {
       assert.equal(response.status, 200);
 
       const body = await response.json();
-      assert.deepEqual(body, {
-        totalTransactions: 3,
-        uniqueSupporters: 2,
-        totalAmountXLM: "15.5000000",
-        assetTotals: [
-          { assetCode: "USDC", total: "2.2500000" },
-          { assetCode: "XLM", total: "15.5000000" },
-        ],
-      });
+      assert.equal(body.totalTransactions, 4);
+      assert.equal(body.uniqueSupporters, 3);
+      assert.ok(body.firstSupportedAt);
+      assert.ok(body.lastSupportedAt);
+
+      // Sort to ensure deterministic deepEqual
+      const sortedTotals = body.assetTotals.sort((a: any, b: any) => a.assetCode.localeCompare(b.assetCode));
+      assert.deepEqual(sortedTotals, [
+        { assetCode: "USDC", assetIssuer: null, total: "2.2500000" },
+        { assetCode: "XLM", assetIssuer: null, total: "114.5000000" },
+      ]);
     });
 
     await runTest("returns 404 for stats of unknown profile", async () => {
@@ -228,7 +267,7 @@ async function main() {
     });
 
     await runTest("GET /profiles supports search across username/displayName with trim and 100-char cap", async () => {
-      const suffix = randomUUID().slice(0, 8);
+      const suffix = safeSuffix();
       const displayNameNeedle = `Needle ${suffix}`;
       const oversizedSearch = `   ${"a".repeat(120)}   `;
       const usernameMatch = `search-user-${suffix}`;
@@ -400,6 +439,117 @@ async function main() {
       const body = await response.json();
       assert.equal(body.error, "Profile not found");
     });
+
+    // Issue #229 — duplicate txHash returns 409 DUPLICATE_TX
+    await runTest("returns 409 DUPLICATE_TX when same txHash submitted twice", async () => {
+      const txHash = `ci-test-dup-${randomUUID()}`;
+      const payload = {
+        txHash,
+        amount: "10.0000000",
+        assetCode: "XLM",
+        status: "SUCCESS",
+        stellarNetwork: "TESTNET",
+        recipientAddress: walletAddress,
+        profileId,
+      };
+
+      const first = await fetch(`${baseUrl}/support-transactions`, {
+        method: "POST",
+        headers: { ...getAuthHeaders() },
+        body: JSON.stringify(payload),
+      });
+      assert.equal(first.status, 201, "first submission should succeed");
+
+      const second = await fetch(`${baseUrl}/support-transactions`, {
+        method: "POST",
+        headers: { ...getAuthHeaders() },
+        body: JSON.stringify(payload),
+      });
+      assert.equal(second.status, 409, "second submission should return 409");
+
+      const body = await second.json();
+      assert.equal(body.code, "DUPLICATE_TX");
+    });
+
+    // Issue #204 — GET /profiles explore endpoint
+    await runTest("GET /profiles returns paginated profile list", async () => {
+      const response = await fetch(`${baseUrl}/profiles?limit=5&offset=0&sort=newest`);
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.ok(Array.isArray(body.profiles));
+      assert.equal(typeof body.total, "number");
+      assert.equal(body.limit, 5);
+      assert.equal(body.offset, 0);
+    });
+
+    await runTest("GET /profiles?asset=XLM filters by accepted asset", async () => {
+      const response = await fetch(`${baseUrl}/profiles?asset=XLM`);
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      for (const profile of body.profiles) {
+        const codes = profile.acceptedAssets.map((a: { code: string }) => a.code);
+        assert.ok(codes.includes("XLM"), `profile ${profile.username} should accept XLM`);
+      }
+    });
+
+    // Issue #220 — Webhook CRUD (auth via Bearer JWT)
+    await runTest("webhook: create, list, and delete", async () => {
+      const whHeaders = { ...getAuthHeaders() };
+
+      // Create
+      const createRes = await fetch(
+        `${baseUrl}/profiles/${baseUsername}/webhooks`,
+        { method: "POST", headers: whHeaders, body: JSON.stringify({ url: "https://example.com/hook" }) },
+      );
+      assert.equal(createRes.status, 201);
+      const created = await createRes.json();
+      assert.ok(created.id);
+      assert.equal(created.url, "https://example.com/hook");
+      assert.ok(created.secret, "secret must be present on creation");
+
+      // List — secret must NOT be included
+      const listRes = await fetch(`${baseUrl}/profiles/${baseUsername}/webhooks`, { headers: whHeaders });
+      assert.equal(listRes.status, 200);
+      const list = await listRes.json();
+      assert.ok(list.some((w: { id: string }) => w.id === created.id));
+      assert.ok(!list.some((w: Record<string, unknown>) => "secret" in w), "secret must not appear in list");
+
+      // Delete
+      const deleteRes = await fetch(
+        `${baseUrl}/profiles/${baseUsername}/webhooks/${created.id}`,
+        { method: "DELETE", headers: whHeaders },
+      );
+      assert.equal(deleteRes.status, 204);
+
+      // Confirm gone
+      const listAfter = await fetch(`${baseUrl}/profiles/${baseUsername}/webhooks`, { headers: whHeaders });
+      const listAfterBody = await listAfter.json();
+      assert.ok(!listAfterBody.some((w: { id: string }) => w.id === created.id));
+    });
+
+    await runTest("webhook: rejects http:// URLs", async () => {
+      const res = await fetch(
+        `${baseUrl}/profiles/${baseUsername}/webhooks`,
+        {
+          method: "POST",
+          headers: { ...getAuthHeaders() },
+          body: JSON.stringify({ url: "http://insecure.example.com/hook" }),
+        },
+      );
+      assert.equal(res.status, 400);
+    });
+
+    await runTest("webhook: unauthenticated request returns 401", async () => {
+      const res = await fetch(
+        `${baseUrl}/profiles/${baseUsername}/webhooks`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ url: "https://example.com/hook" }),
+        },
+      );
+      assert.equal(res.status, 401);
+    });
     await runTest("PATCH updates social fields on a profile", async () => {
       const response = await fetch(`${baseUrl}/profiles/${baseUsername}`, {
         method: "PATCH",
@@ -481,7 +631,7 @@ async function main() {
         headers: getAuthHeaders(),
         body: JSON.stringify({
           ...validProfilePayload,
-          username: `social-test-${randomUUID().slice(0, 8)}`,
+          username: `social-test-${safeSuffix()}`,
           email: "social@example.com",
           websiteUrl: "https://example.com",
           twitterHandle: "testhandle",
@@ -498,14 +648,14 @@ async function main() {
     });
 
     await runTest("POST /profiles - returns 409 EMAIL_TAKEN for duplicate email", async () => {
-      const dupEmail = `dup-${randomUUID().slice(0, 8)}@example.com`;
+      const dupEmail = `dup-${safeSuffix()}@example.com`;
 
       await fetch(`${baseUrl}/profiles`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify({
           ...validProfilePayload,
-          username: `first-${randomUUID().slice(0, 8)}`,
+          username: `first-${safeSuffix()}`,
           email: dupEmail,
         }),
       });
@@ -515,7 +665,7 @@ async function main() {
         headers: getAuthHeaders(),
         body: JSON.stringify({
           ...validProfilePayload,
-          username: `second-${randomUUID().slice(0, 8)}`,
+          username: `second-${safeSuffix()}`,
           email: dupEmail,
         }),
       });
@@ -531,7 +681,7 @@ async function main() {
         headers: getAuthHeaders(),
         body: JSON.stringify({
           ...validProfilePayload,
-          username: `inv-email-${randomUUID().slice(0, 8)}`,
+          username: `inv-email-${safeSuffix()}`,
           email: "not-an-email",
         }),
       });
@@ -545,7 +695,7 @@ async function main() {
         headers: getAuthHeaders(),
         body: JSON.stringify({
           ...validProfilePayload,
-          username: `inv-url-${randomUUID().slice(0, 8)}`,
+          username: `inv-url-${safeSuffix()}`,
           websiteUrl: "http://example.com",
         }),
       });
@@ -553,14 +703,16 @@ async function main() {
       assert.equal(response.status, 400);
     });
 
-    await runTest("POST /profiles - returns 400 for twitterHandle with @ prefix", async () => {
+    await runTest("POST /profiles - returns 400 for twitterHandle with only invalid characters", async () => {
+      // sanitizeSocialHandle strips non-alphanumeric chars; a handle of only
+      // special chars reduces to "" which then fails Zod's regex validation.
       const response = await fetch(`${baseUrl}/profiles`, {
         method: "POST",
         headers: getAuthHeaders(),
         body: JSON.stringify({
           ...validProfilePayload,
-          username: `inv-twit-${randomUUID().slice(0, 8)}`,
-          twitterHandle: "@testhandle",
+          username: `inv-twit-${safeSuffix()}`,
+          twitterHandle: "!@#$%^&*()",
         }),
       });
 
@@ -607,13 +759,189 @@ async function main() {
       );
     });
 
+    // ── Auth Flow Integration Tests (Issue #282) ─────────────────────────
+
+    await runTest("auth flow: complete challenge-sign-verify-JWT flow", async () => {
+      // 1. Generate a new keypair (simulating a user's wallet)
+      const keypair = Keypair.random();
+      const testWalletAddress = keypair.publicKey();
+
+      // 2. Generate a challenge
+      const challenge = generateChallenge(testWalletAddress);
+      assert.ok(challenge.includes(testWalletAddress), "Challenge should include wallet address");
+
+      // 3. Sign the challenge
+      const messageBuffer = Buffer.from(challenge, "utf8");
+      const signature = keypair.sign(messageBuffer).toString("base64");
+
+      // 4. Verify the signature
+      const isValidSignature = verifySignature(testWalletAddress, challenge, signature);
+      assert.ok(isValidSignature, "Signature should be valid");
+
+      // 5. Issue a JWT
+      const token = signJWT(testWalletAddress);
+      assert.ok(typeof token === "string", "Token should be issued");
+
+      // 6. Use the JWT to access a protected endpoint
+      const response = await fetch(`${baseUrl}/profiles`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          username: `auth-test-${safeSuffix()}`,
+          displayName: "Auth Test User",
+          walletAddress: testWalletAddress,
+          acceptedAssets: [{ code: "XLM" }],
+        }),
+      });
+
+      assert.equal(response.status, 201, "Should be able to create profile with valid JWT");
+    });
+
+    await runTest("auth flow: HTTP challenge -> signature verify -> JWT", async () => {
+      const keypair = Keypair.random();
+      const testWalletAddress = keypair.publicKey();
+
+      const challengeResponse = await fetch(`${baseUrl}/auth/challenge`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ walletAddress: testWalletAddress }),
+      });
+      assert.equal(challengeResponse.status, 200);
+      const challengeBody = await challengeResponse.json();
+      assert.equal(challengeBody.walletAddress, testWalletAddress);
+      assert.equal(typeof challengeBody.challenge, "string");
+
+      const signature = keypair
+        .sign(Buffer.from(challengeBody.challenge, "utf8"))
+        .toString("base64");
+
+      const verifyResponse = await fetch(`${baseUrl}/auth/verify`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ walletAddress: testWalletAddress, signature }),
+      });
+      assert.equal(verifyResponse.status, 200);
+      const verifyBody = await verifyResponse.json();
+      assert.equal(verifyBody.walletAddress, testWalletAddress);
+      assert.equal(typeof verifyBody.token, "string");
+      assert.equal(typeof verifyBody.userId, "string");
+    });
+
+    await runTest("auth flow: rejects invalid signature", async () => {
+      const keypair1 = Keypair.random();
+      const keypair2 = Keypair.random();
+      const testWalletAddress = keypair1.publicKey();
+
+      const challenge = generateChallenge(testWalletAddress);
+      
+      // Sign with wrong keypair
+      const messageBuffer = Buffer.from(challenge, "utf8");
+      const wrongSignature = keypair2.sign(messageBuffer).toString("base64");
+
+      const isValidSignature = verifySignature(testWalletAddress, challenge, wrongSignature);
+      assert.equal(isValidSignature, false, "Wrong signature should fail verification");
+    });
+
+    await runTest("auth flow: protected endpoint rejects missing JWT", async () => {
+      const response = await fetch(`${baseUrl}/profiles`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          username: `no-auth-${safeSuffix()}`,
+          displayName: "No Auth User",
+          walletAddress: "GCZJM35NKGVK47BB4SPBDV25477PZYIYPVVG453LPYFNXLS3FGHDXOCM",
+          acceptedAssets: [{ code: "XLM" }],
+        }),
+      });
+
+      assert.equal(response.status, 401, "Should reject request without JWT");
+      const body = await response.json();
+      assert.ok(body.error.includes("Missing or invalid token"), "Should return appropriate error");
+    });
+
+    await runTest("auth flow: protected endpoint rejects invalid JWT", async () => {
+      const response = await fetch(`${baseUrl}/profiles`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "authorization": "Bearer invalid.token.here",
+        },
+        body: JSON.stringify({
+          username: `bad-token-${safeSuffix()}`,
+          displayName: "Bad Token User",
+          walletAddress: "GCZJM35NKGVK47BB4SPBDV25477PZYIYPVVG453LPYFNXLS3FGHDXOCM",
+          acceptedAssets: [{ code: "XLM" }],
+        }),
+      });
+
+      assert.equal(response.status, 401, "Should reject request with invalid JWT");
+      const body = await response.json();
+      assert.ok(body.error.includes("Invalid or expired token"), "Should return appropriate error");
+    });
+
+    await runTest("auth flow: protected endpoint rejects malformed authorization header", async () => {
+      const response = await fetch(`${baseUrl}/profiles`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "authorization": "InvalidFormat token",
+        },
+        body: JSON.stringify({
+          username: `malformed-${safeSuffix()}`,
+          displayName: "Malformed Auth User",
+          walletAddress: "GCZJM35NKGVK47BB4SPBDV25477PZYIYPVVG453LPYFNXLS3FGHDXOCM",
+          acceptedAssets: [{ code: "XLM" }],
+        }),
+      });
+
+      assert.equal(response.status, 401, "Should reject request with malformed header");
+    });
+
+    await runTest("auth flow: JWT with userId can access protected endpoints", async () => {
+      const keypair = Keypair.random();
+      const testWalletAddress = keypair.publicKey();
+      
+      // Create a user first
+      const user = await prisma.user.create({
+        data: {
+          email: `auth-test-${randomUUID()}@example.com`,
+        },
+      });
+
+      // Issue JWT with userId
+      const token = signJWT(testWalletAddress, user.id);
+
+      const response = await fetch(`${baseUrl}/profiles`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "authorization": `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          username: `userid-test-${safeSuffix()}`,
+          displayName: "User ID Test",
+          walletAddress: testWalletAddress,
+          acceptedAssets: [{ code: "XLM" }],
+        }),
+      });
+
+      assert.equal(response.status, 201, "Should be able to create profile with JWT containing userId");
+    });
+
   } finally {
     await stopServer();
   }
 }
 
-main().catch((error) => {
-  console.error("Backend tests failed.");
-  console.error(error);
-  process.exit(1);
-});
+main()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error("Backend tests failed.");
+    console.error(error);
+    process.exit(1);
+  });
