@@ -1,6 +1,7 @@
 import { prisma } from "../db.js";
 import { sendEmail } from "../mailer.js";
 import { logger } from "../logger.js";
+import { escapeHtml } from "./email.js";
 
 const PROFILE_BATCH_SIZE = 100;
 
@@ -82,7 +83,7 @@ export async function sendWeeklyDigests(prismaClient = prisma) {
         if (txCount === 0) continue;
 
         const assetBreakdown = assetGroups
-          .map((g) => `${g._sum.amount?.toString() ?? "0"} ${g.assetCode}`)
+          .map((g) => `${g._sum.amount?.toString() ?? "0"} ${escapeHtml(g.assetCode)}`)
           .join(", ");
 
         const milestonesSection =
@@ -109,7 +110,7 @@ export async function sendWeeklyDigests(prismaClient = prisma) {
 
         const html = `
         <h2>Your Weekly NovaSupport Recap</h2>
-        <p>Here's what happened with your profile <strong>${profile.displayName}</strong> this week:</p>
+        <p>Here's what happened with your profile <strong>${escapeHtml(profile.displayName)}</strong> this week:</p>
         <ul>
           <li><strong>Total received:</strong> ${assetBreakdown}</li>
           <li><strong>Transactions:</strong> ${txCount}</li>
@@ -117,7 +118,7 @@ export async function sendWeeklyDigests(prismaClient = prisma) {
         </ul>
         ${milestonesSection}
         <br/>
-        <p><a href="https://novasupport.xyz/${profile.username}">View your profile</a></p>
+        <p><a href="https://novasupport.xyz/${encodeURIComponent(profile.username)}">View your profile</a></p>
         <br/>
         <p>Thanks,<br/>The NovaSupport Team</p>
         <br/>

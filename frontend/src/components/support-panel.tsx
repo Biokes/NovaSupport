@@ -38,6 +38,31 @@ type Asset = {
 const FEE_IN_XLM = Number(BASE_FEE) / 10_000_000;
 const IS_TESTNET = STELLAR_NETWORK !== "PUBLIC";
 
+/**
+ * Truncates a string so its UTF-8 byte representation is at most
+ * STELLAR_MEMO_BYTE_LIMIT bytes (Stellar's hard limit for TEXT memos).
+ * Plain `.slice(0, 28)` counts UTF-16 code units, not bytes, so multibyte
+ * characters (emoji, non-Latin scripts) can still exceed the limit after
+ * that "truncation". We encode to UTF-8 via TextEncoder, slice the byte
+ * array, then decode — being careful not to cut in the middle of a
+ * multibyte sequence by shortening until the decode round-trips cleanly.
+ */
+const STELLAR_MEMO_BYTE_LIMIT = 28;
+function truncateMemoToStellarLimit(input: string): string {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder("utf-8", { fatal: false });
+  let bytes = encoder.encode(input);
+  if (bytes.length <= STELLAR_MEMO_BYTE_LIMIT) return input;
+  bytes = bytes.slice(0, STELLAR_MEMO_BYTE_LIMIT);
+  // Walk back until the slice is valid UTF-8 (no broken multibyte tail).
+  while (bytes.length > 0) {
+    const decoded = decoder.decode(bytes);
+    if (encoder.encode(decoded).length === bytes.length) return decoded;
+    bytes = bytes.slice(0, bytes.length - 1);
+  }
+  return "";
+}
+
 type SupportPanelProps = {
   walletAddress: string;
   acceptedAssets?: Asset[];
@@ -107,6 +132,8 @@ export function SupportPanel({
     },
     [handleCopy],
   );
+
+  const isXlmPayment = paymentAsset.code === "XLM";
 
   const handleSend = useCallback(async () => {
     const parsedAmt = parseFloat(amount);
@@ -178,7 +205,7 @@ export function SupportPanel({
       setMessage("");
 
       if (isRecurring && profileId) {
-        await apiFetch(`${API_BASE_URL}/api/v1/recurring-support`, {
+        const recurringRes = await apiFetch(`${API_BASE_URL}/v1/recurring-support`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -188,9 +215,19 @@ export function SupportPanel({
             assetIssuer: paymentAsset.issuer || undefined,
             frequency,
           }),
-        }).catch(() => {
-          // Non-critical — recurring registration failure doesn't affect the payment.
         });
+        if (!recurringRes.ok) {
+          const body = (await recurringRes.json().catch(() => ({}))) as Record<
+            string,
+            unknown
+          >;
+          showToast(
+            typeof body.error === "string"
+              ? body.error
+              : "Payment succeeded, but recurring support could not be enabled.",
+            "error",
+          );
+        }
       }
 
       await loadBalance(visitorAddress);
@@ -211,6 +248,7 @@ export function SupportPanel({
     profileId,
     frequency,
     showToast,
+    isXlmPayment,
   ]);
 
   const loadBalance = async (address: string) => {
@@ -276,7 +314,6 @@ export function SupportPanel({
   const isValidAmount = hasValidAmount;
   const recipientAsset = { code: "XLM" };
 
-  const isXlmPayment = paymentAsset.code === "XLM";
   const xlmBalance = parseFloat(
     visitorBalances.find((b) => b.asset_type === "native")?.balance ?? "0"
   );
@@ -525,15 +562,15 @@ export function SupportPanel({
             Leave a message (optional)
           </label>
           <span
-            className={`text-[10px] font-medium ${message.length >= 28 ? "text-red-400" : "text-sky/40"}`}
+            className={`text-[10px] font-medium ${new TextEncoder().encode(message).length >= 28 ? "text-red-400" : "text-sky/40"}`}
           >
-            {message.length} / 28
+            {new TextEncoder().encode(message).length} / 28
           </span>
         </div>
         <textarea
           id={messageInputId}
           value={message}
-          onChange={(e) => setMessage(e.target.value.slice(0, 28))}
+          onChange={(e) => setMessage(truncateMemoToStellarLimit(e.target.value))}
           placeholder="e.g. Keep up the great work!"
           rows={2}
           aria-label="Optional message to the creator"

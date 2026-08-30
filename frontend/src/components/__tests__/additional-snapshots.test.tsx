@@ -1,3 +1,4 @@
+import React from "react";
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { render, waitFor } from "@testing-library/react";
 import { ThemeToggle } from "../theme-toggle";
@@ -5,15 +6,35 @@ import { MilestoneCard } from "../milestone-card";
 import { EmbedWidget } from "../embed-widget";
 import { ActivityFeed } from "../activity-feed";
 import { NotificationPreferences } from "../notification-preferences";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-vi.mock("framer-motion", () => ({
-  motion: {
-    div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
-  },
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-}));
+function renderWithQueryClient(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  );
+}
 
-vi.mock("lucide-react", () => ({
+vi.mock("framer-motion", () => {
+  // Passthrough for any motion.<element>, not just the handful used today.
+  const motion = new Proxy(
+    {},
+    {
+      get: (_target, tag: string) => {
+        const Passthrough = ({ children, ...props }: any) =>
+          React.createElement(tag, props, children);
+        Passthrough.displayName = `motion.${tag}`;
+        return Passthrough;
+      },
+    },
+  );
+  return { motion, AnimatePresence: ({ children }: any) => children };
+});
+
+vi.mock("lucide-react", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("lucide-react")>()),
   TrendingUp: () => <span>TrendingUp</span>,
   Send: () => <span>Send</span>,
   Award: () => <span>Award</span>,
@@ -30,7 +51,8 @@ vi.mock("next/link", () => ({
   default: ({ children, href }: any) => <a href={href}>{children}</a>,
 }));
 
-vi.mock("@/lib/config", () => ({
+vi.mock("@/lib/config", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/config")>()),
   SITE_URL: "https://novasupport.app",
   API_BASE_URL: "http://localhost:4000",
 }));
@@ -88,8 +110,15 @@ describe("Additional Component Snapshots", () => {
       status: "reached",
       createdAt: "2024-01-01T00:00:00.000Z",
     };
-    const { container } = render(<MilestoneCard milestone={milestone} index={1} />);
-    expect(container).toMatchSnapshot();
+    // A reached milestone renders a confetti burst whose particle sizes and
+    // colours come from Math.random(), so pin it to keep the snapshot stable.
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0.42);
+    try {
+      const { container } = render(<MilestoneCard milestone={milestone} index={1} />);
+      expect(container).toMatchSnapshot();
+    } finally {
+      randomSpy.mockRestore();
+    }
   });
 
   it("EmbedWidget matches snapshot (dark theme, minimal props)", () => {
@@ -136,7 +165,7 @@ describe("Additional Component Snapshots", () => {
   });
 
   it("ActivityFeed matches snapshot (loading state)", () => {
-    const { container } = render(<ActivityFeed username="johndoe" limit={5} />);
+    const { container } = renderWithQueryClient(<ActivityFeed username="johndoe" limit={5} />);
     expect(container).toMatchSnapshot();
   });
 
@@ -157,7 +186,7 @@ describe("Additional Component Snapshots", () => {
         .mockRejectedValueOnce(new Error("Network error")),
     );
 
-    const { container } = render(<ActivityFeed username="johndoe" limit={5} />);
+    const { container } = renderWithQueryClient(<ActivityFeed username="johndoe" limit={5} />);
 
     await waitFor(() => {
       expect(container.textContent).toContain("Milestone data could not be loaded");

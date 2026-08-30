@@ -547,8 +547,8 @@ export default function DashboardPage() {
       setDripsLoading(true);
       try {
         const endpoint = isOwner
-          ? `${API_BASE_URL}/recurring-support?profileId=${username}`
-          : `${API_BASE_URL}/recurring-support`;
+          ? `${API_BASE_URL}/v1/recurring-support?profileId=${username}`
+          : `${API_BASE_URL}/v1/recurring-support`;
 
         const res = await apiFetch(endpoint);
 
@@ -578,7 +578,7 @@ export default function DashboardPage() {
     setDripActionLoading(id);
     setDripActionError(null);
     try {
-      const res = await apiFetch(`${API_BASE_URL}/recurring-support/${id}`, {
+      const res = await apiFetch(`${API_BASE_URL}/v1/recurring-support/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: action }),
@@ -792,8 +792,8 @@ export default function DashboardPage() {
               value={`${data.summary.totalRaised.toLocaleString()} ${
                 assetBreakdown.length > 0
                   ? assetBreakdown.reduce((a, b) =>
-                      a.value >= b.value ? a : b
-                    ).name
+                      a.amount >= b.amount ? a : b
+                    ).assetCode
                   : "XLM"
               }`}
               icon={<Wallet className="text-mint" />}
@@ -812,8 +812,8 @@ export default function DashboardPage() {
               value={`${data.summary.avgContribution} ${
                 assetBreakdown.length > 0
                   ? assetBreakdown.reduce((a, b) =>
-                      a.value >= b.value ? a : b
-                    ).name
+                      a.amount >= b.amount ? a : b
+                    ).assetCode
                   : "XLM"
               }`}
               icon={<TrendingUp className="text-gold" />}

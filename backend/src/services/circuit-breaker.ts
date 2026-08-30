@@ -22,6 +22,14 @@ export class CircuitBreaker {
   private nextAttempt: number = 0;
   private readonly storage: CircuitBreakerStorage | null;
   private initialized: Promise<void> | null = null;
+  /**
+   * Tracks the single in-flight canary request during HALF_OPEN state.
+   * Once one caller claims the canary slot (by setting this promise), every
+   * other concurrent caller sees the breaker as still OPEN and fails fast,
+   * preventing a request burst from re-tripping the circuit right after
+   * Horizon recovers from an outage.
+   */
+  private halfOpenCanary: Promise<unknown> | null = null;
 
   constructor(
     failureThreshold = 5,
@@ -44,6 +52,33 @@ export class CircuitBreaker {
         logger.info("Circuit breaker state: HALF_OPEN");
       } else {
         throw new Error("Circuit breaker is OPEN");
+      }
+    }
+
+    // HALF_OPEN: allow exactly one canary request through; all other
+    // concurrent callers fail fast (as if still OPEN) until the canary
+    // resolves. This prevents a request burst from re-tripping the circuit
+    // immediately after the downstream service recovers.
+    if (this.state === "HALF_OPEN") {
+      if (this.halfOpenCanary !== null) {
+        throw new Error("Circuit breaker is OPEN");
+      }
+
+      let resolvCanary!: () => void;
+      this.halfOpenCanary = new Promise<void>((resolve) => {
+        resolvCanary = resolve;
+      });
+
+      try {
+        const result = await fn();
+        await this.onSuccess();
+        return result;
+      } catch (error) {
+        await this.onFailure();
+        throw error;
+      } finally {
+        this.halfOpenCanary = null;
+        resolvCanary();
       }
     }
 

@@ -11,39 +11,28 @@ const LEDGERS_THRESHOLD: u32 = 50_000;
 #[repr(u32)]
 pub enum Error {
     // Input validation errors (1-99)
-    InvalidAmount = 1,
     ZeroAmount = 2,
     NegativeAmount = 3,
     EmptyMessage = 4,
     MessageTooLong = 5,
     InvalidAssetCode = 6,
-    
+
     // Authorization errors (100-199)
-    Unauthorized = 100,
-    NotAdmin = 101,
     NotRecipient = 102,
-    CallerNotAuthorized = 103,
-    
+
     // Contract state errors (200-299)
     ContractPaused = 200,
     ContractNotInitialized = 201,
     AlreadyInitialized = 202,
-    
+
     // Balance and transfer errors (300-399)
     InsufficientBalance = 300,
     InsufficientContractBalance = 301,
-    TransferFailed = 302,
     WithdrawAmountExceedsBalance = 303,
-    
+
     // Storage and data errors (400-499)
-    StorageError = 400,
-    DataNotFound = 401,
     RecipientNotFound = 402,
-    
-    // Asset and token errors (500-599)
-    InvalidAsset = 500,
-    AssetNotSupported = 501,
-    TokenClientError = 502,
+    ZeroBalance = 403,
 }
 
 #[derive(Clone)]
@@ -51,7 +40,7 @@ pub enum Error {
 pub enum DataKey {
     SupportCount,
     RecipientCount(Address),
-    RecipientTotal(Address),
+    RecipientTotal(Address, Address), // (Recipient, Asset)
     TotalByAsset(Address, Address), // (Recipient, Asset)
     Admin,
     Paused,
@@ -93,36 +82,7 @@ impl SupportPageContract {
         Ok(())
     }
 
-    // pub fn pause(e: Env) -> Result<(), Error> {
-    //     let admin: Address = e
-    //         .storage()
-    //         .persistent()
-    //         .get(&DataKey::Admin)
-    //         .ok_or(Error::ContractNotInitialized)?;
-    //     admin.require_auth();
-        
-    //     e.storage().persistent().set(&DataKey::Paused, &true);
-    //     e.storage()
-    //         .persistent()
-    //         .extend_ttl(&DataKey::Paused, LEDGERS_THRESHOLD, LEDGERS_TO_LIVE);
-    //     Ok(())
-    // }
-
-    // pub fn unpause(e: Env) -> Result<(), Error> {
-    //     let admin: Address = e
-    //         .storage()
-    //         .persistent()
-    //         .get(&DataKey::Admin)
-    //         .ok_or(Error::ContractNotInitialized)?;
-    //     admin.require_auth();
-        
-    //     e.storage().persistent().set(&DataKey::Paused, &false);
-    //     e.storage()
-    //         .persistent()
-    //         .extend_ttl(&DataKey::Paused, LEDGERS_THRESHOLD, LEDGERS_TO_LIVE);
-    //     Ok(())
-    // }
-pub fn pause(e: Env) -> Result<(), Error> {
+    pub fn pause(e: Env) -> Result<(), Error> {
     let admin: Address = e
         .storage()
         .persistent()
@@ -202,22 +162,22 @@ pub fn unpause(e: Env) -> Result<(), Error> {
         }
 
         // Validate asset code
-        if c.len() == 0 {
+        if c.len() == 0 || c.len() > 12 {
             return Err(Error::InvalidAssetCode);
         }
 
-        // Transfer funds from supporter to contract
+        // Checks: call balance() on the (potentially untrusted) asset contract
+        // here — at function entry, before any storage reads or writes — so that
+        // a malicious token's re-entrant call into support() finds no partially-
+        // updated state to exploit.  This is the first and only external call
+        // before the Effects block.
         let client = soroban_sdk::token::Client::new(&e, &asset);
-        
-        // Check supporter balance before transfer
         let supporter_balance = client.balance(&s);
         if supporter_balance < o {
             return Err(Error::InsufficientBalance);
         }
-        
-        // Transfer tokens - panics on failure per Soroban token contract spec
-        client.transfer(&s, &e.current_contract_address(), &o);
 
+        // Effects: update all counters BEFORE the external token transfer (CEI)
         let st = e.storage().persistent();
         let ct: u32 = st.get(&DataKey::SupportCount).unwrap_or(0);
         let nct = ct + 1;
@@ -233,13 +193,10 @@ pub fn unpause(e: Env) -> Result<(), Error> {
             LEDGERS_TO_LIVE,
         );
 
-        let total: i128 = st.get(&DataKey::RecipientTotal(r.clone())).unwrap_or(0);
-        st.set(&DataKey::RecipientTotal(r.clone()), &(total + o));
-        st.extend_ttl(
-            &DataKey::RecipientTotal(r.clone()),
-            LEDGERS_THRESHOLD,
-            LEDGERS_TO_LIVE,
-        );
+        let total_key = DataKey::RecipientTotal(r.clone(), asset.clone());
+        let total: i128 = st.get(&total_key).unwrap_or(0);
+        st.set(&total_key, &(total + o));
+        st.extend_ttl(&total_key, LEDGERS_THRESHOLD, LEDGERS_TO_LIVE);
 
         let asset_total: i128 = st
             .get(&DataKey::TotalByAsset(r.clone(), asset.clone()))
@@ -256,14 +213,18 @@ pub fn unpause(e: Env) -> Result<(), Error> {
 
         let tt = symbol_short!("support");
         let ev = SupportEvent {
-            supporter: s,
-            recipient: r,
+            supporter: s.clone(),
+            recipient: r.clone(),
             amount: o,
             asset_code: c,
             message: m,
             timestamp: e.ledger().timestamp(),
         };
         e.events().publish((tt,), ev);
+
+        // Interaction: transfer tokens LAST (checks-effects-interactions)
+        client.transfer(&s, &e.current_contract_address(), &o);
+
         Ok(nct)
     }
 
@@ -300,13 +261,29 @@ pub fn unpause(e: Env) -> Result<(), Error> {
             return Err(Error::ZeroAmount);
         }
 
+        // Checks: call balance() on the (potentially untrusted) asset contract
+        // here — at function entry, before any storage reads or writes — so that
+        // a malicious token's re-entrant call into withdraw() finds no partially-
+        // updated state to exploit.  This is the first and only external call
+        // before the Effects block.
+        let client = soroban_sdk::token::Client::new(&e, &asset);
+        let contract_balance = client.balance(&e.current_contract_address());
+        if contract_balance < amount {
+            return Err(Error::InsufficientContractBalance);
+        }
+
         let st = e.storage().persistent();
         let key = DataKey::TotalByAsset(recipient.clone(), asset.clone());
+
+        // Distinguish a recipient the contract has never seen from a known
+        // recipient whose balance has already been withdrawn to zero.
+        if !st.has(&key) {
+            return Err(Error::RecipientNotFound);
+        }
         let balance: i128 = st.get(&key).unwrap_or(0);
 
-        // Check if recipient has any balance for this asset
         if balance == 0 {
-            return Err(Error::RecipientNotFound);
+            return Err(Error::ZeroBalance);
         }
 
         // Check if withdrawal amount exceeds available balance
@@ -314,21 +291,11 @@ pub fn unpause(e: Env) -> Result<(), Error> {
             return Err(Error::WithdrawAmountExceedsBalance);
         }
 
-        // Check contract's token balance
-        let client = soroban_sdk::token::Client::new(&e, &asset);
-        let contract_balance = client.balance(&e.current_contract_address());
-        if contract_balance < amount {
-            return Err(Error::InsufficientContractBalance);
-        }
-
-        // Transfer funds from contract to recipient - panics on failure per Soroban token contract spec
-        client.transfer(&e.current_contract_address(), &recipient, &amount);
-
-        // Deduct from TotalByAsset storage
+        // Effects: update all storage BEFORE the external token transfer (CEI)
         st.set(&key, &(balance - amount));
         st.extend_ttl(&key, LEDGERS_THRESHOLD, LEDGERS_TO_LIVE);
 
-        let recipient_total_key = DataKey::RecipientTotal(recipient.clone());
+        let recipient_total_key = DataKey::RecipientTotal(recipient.clone(), asset.clone());
         let recipient_total: i128 = st.get(&recipient_total_key).unwrap_or(0);
         let new_recipient_total = if recipient_total >= amount {
             recipient_total - amount
@@ -340,7 +307,10 @@ pub fn unpause(e: Env) -> Result<(), Error> {
 
         // Emit a withdraw event
         e.events()
-            .publish((symbol_short!("withdraw"), caller, asset), amount);
+            .publish((symbol_short!("withdraw"), caller.clone(), asset.clone()), amount);
+
+        // Interaction: transfer tokens LAST (checks-effects-interactions)
+        client.transfer(&e.current_contract_address(), &recipient, &amount);
 
         Ok(())
     }
@@ -359,10 +329,10 @@ pub fn unpause(e: Env) -> Result<(), Error> {
             .unwrap_or(0)
     }
 
-    pub fn get_recipient_total(e: Env, r: Address) -> i128 {
+    pub fn get_recipient_total(e: Env, r: Address, asset: Address) -> i128 {
         e.storage()
             .persistent()
-            .get(&DataKey::RecipientTotal(r))
+            .get(&DataKey::RecipientTotal(r, asset))
             .unwrap_or(0)
     }
 
@@ -418,7 +388,7 @@ mod test {
             client.get_total_by_asset(&recipient, &asset),
             8_000_000_i128
         );
-        assert_eq!(client.get_recipient_total(&recipient), 8_000_000_i128);
+        assert_eq!(client.get_recipient_total(&recipient, &asset), 8_000_000_i128);
     }
 
     #[test]
@@ -503,13 +473,13 @@ mod test {
         );
 
         assert_eq!(client.get_total_by_asset(&recipient, &asset), 10_000_i128);
-        assert_eq!(client.get_recipient_total(&recipient), 10_000_i128);
+        assert_eq!(client.get_recipient_total(&recipient, &asset), 10_000_i128);
 
         // Withdraw half
         client.withdraw(&recipient, &recipient, &asset, &5_000_i128);
 
         assert_eq!(client.get_total_by_asset(&recipient, &asset), 5_000_i128);
-        assert_eq!(client.get_recipient_total(&recipient), 5_000_i128);
+        assert_eq!(client.get_recipient_total(&recipient, &asset), 5_000_i128);
 
         // Verify token balance of recipient
         let token_client = soroban_sdk::token::Client::new(&e, &asset);
@@ -875,6 +845,80 @@ mod test {
     }
 
     #[test]
+    #[should_panic(expected = "Error(Contract, #403)")] // Error::ZeroBalance
+    fn withdraw_again_after_full_withdrawal_is_zero_balance_not_not_found() {
+        let e = Env::default();
+        e.mock_all_auths();
+        let contract_id = e.register(SupportPageContract, ());
+        let client = SupportPageContractClient::new(&e, &contract_id);
+
+        let supporter = Address::generate(&e);
+        let recipient = Address::generate(&e);
+        let admin = Address::generate(&e);
+        let asset = e
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&e, &asset);
+        token_admin.mint(&supporter, &10_000_i128);
+
+        client.initialize(&admin);
+        client.support(
+            &supporter,
+            &recipient,
+            &asset,
+            &10_000_i128,
+            &String::from_str(&e, "XLM"),
+            &String::from_str(&e, "Support"),
+        );
+
+        // Withdraw everything, then withdraw again - this recipient is known
+        // to the contract, so the second call must be ZeroBalance, not
+        // RecipientNotFound.
+        client.withdraw(&recipient, &recipient, &asset, &10_000_i128);
+        client.withdraw(&recipient, &recipient, &asset, &1_i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #301)")] // Error::InsufficientContractBalance
+    fn withdraw_fails_when_contract_token_balance_is_below_recorded_total() {
+        let e = Env::default();
+        e.mock_all_auths();
+        let contract_id = e.register(SupportPageContract, ());
+        let client = SupportPageContractClient::new(&e, &contract_id);
+
+        let supporter = Address::generate(&e);
+        let recipient = Address::generate(&e);
+        let admin = Address::generate(&e);
+        let asset = e
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&e, &asset);
+        token_admin.mint(&supporter, &10_000_i128);
+
+        client.initialize(&admin);
+        client.support(
+            &supporter,
+            &recipient,
+            &asset,
+            &1_000_i128,
+            &String::from_str(&e, "XLM"),
+            &String::from_str(&e, "Support"),
+        );
+
+        // Inflate the recorded total beyond what the contract actually
+        // holds in tokens, simulating the contract's own balance falling
+        // below a recipient's recorded total.
+        e.as_contract(&contract_id, || {
+            e.storage().persistent().set(
+                &DataKey::TotalByAsset(recipient.clone(), asset.clone()),
+                &1_000_000_i128,
+            );
+        });
+
+        client.withdraw(&recipient, &recipient, &asset, &1_000_000_i128);
+    }
+
+    #[test]
     #[should_panic(expected = "Error(Contract, #4)")] // Error::EmptyMessage
     fn support_with_empty_message() {
         let e = Env::default();
@@ -1032,5 +1076,69 @@ mod test {
         let asset = Address::generate(&e);
 
         client.withdraw(&recipient, &recipient, &asset, &1000_i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #6)")] // Error::InvalidAssetCode
+    fn support_with_too_long_asset_code() {
+        let e = Env::default();
+        e.mock_all_auths();
+        let contract_id = e.register(SupportPageContract, ());
+        let client = SupportPageContractClient::new(&e, &contract_id);
+
+        let supporter = Address::generate(&e);
+        let recipient = Address::generate(&e);
+        let admin = Address::generate(&e);
+        let asset = e
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&e, &asset);
+        token_admin.mint(&supporter, &10_000_i128);
+
+        client.initialize(&admin);
+
+        client.support(
+            &supporter,
+            &recipient,
+            &asset,
+            &1000_i128,
+            &String::from_str(&e, "TOOLONGASSETCO"),
+            &String::from_str(&e, "Support with too-long asset code"),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #200)")] // Error::ContractPaused
+    fn withdraw_fails_when_contract_is_paused() {
+        let e = Env::default();
+        e.mock_all_auths();
+        let contract_id = e.register(SupportPageContract, ());
+        let client = SupportPageContractClient::new(&e, &contract_id);
+
+        let admin = Address::generate(&e);
+        let supporter = Address::generate(&e);
+        let recipient = Address::generate(&e);
+        let asset = e
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
+        let token_admin = soroban_sdk::token::StellarAssetClient::new(&e, &asset);
+        token_admin.mint(&supporter, &10_000_i128);
+
+        client.initialize(&admin);
+
+        // Fund the recipient so withdraw has a balance
+        client.support(
+            &supporter,
+            &recipient,
+            &asset,
+            &5_000_i128,
+            &String::from_str(&e, "XLM"),
+            &String::from_str(&e, "Pre-withdraw support"),
+        );
+
+        client.pause();
+
+        // Withdraw while paused must fail
+        client.withdraw(&recipient, &recipient, &asset, &1_000_i128);
     }
 }

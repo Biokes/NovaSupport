@@ -1,7 +1,7 @@
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import express, { Response } from "express";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { rateLimit } from "express-rate-limit";
 import { pinoHttp } from "pino-http";
 import type { Logger } from "pino";
@@ -39,7 +39,7 @@ import { processPendingWebhookDeliveries } from "./services/webhook-processor.js
 import { getIsRedisAvailable } from "./services/redis.js";
 import { enqueueWebhookDelivery } from "./services/webhook-queue.js";
 import { addMonths } from "./services/drip-scheduler.js";
-import { sanitizeBody, sanitizeQuery } from "./middleware/sanitize.js";
+import { sanitizeBody, sanitizeQuery, sanitizeString } from "./middleware/sanitize.js";
 import { CircuitBreaker, type CircuitBreakerStorage, type State } from "./services/circuit-breaker.js";
 import {
   validateUsername,
@@ -103,11 +103,25 @@ function createPrismaCircuitBreakerStorage(name: string): CircuitBreakerStorage 
     },
   };
 }
+const rawHorizonFailureThreshold = process.env.HORIZON_CIRCUIT_BREAKER_THRESHOLD
+  ? Number(process.env.HORIZON_CIRCUIT_BREAKER_THRESHOLD)
+  : undefined;
+const horizonFailureThreshold =
+  rawHorizonFailureThreshold !== undefined && Number.isFinite(rawHorizonFailureThreshold)
+    ? rawHorizonFailureThreshold
+    : 5;
+const rawHorizonResetTimeoutMs = process.env.HORIZON_CIRCUIT_BREAKER_RESET_TIMEOUT_MS
+  ? Number(process.env.HORIZON_CIRCUIT_BREAKER_RESET_TIMEOUT_MS)
+  : undefined;
+const horizonResetTimeoutMs =
+  rawHorizonResetTimeoutMs !== undefined && Number.isFinite(rawHorizonResetTimeoutMs)
+    ? rawHorizonResetTimeoutMs
+    : 30000;
 const horizonCircuitBreaker = new CircuitBreaker(
-  5,
-  30000,
+  horizonFailureThreshold,
+  horizonResetTimeoutMs,
   createPrismaCircuitBreakerStorage("horizon"),
-); // 5 failures, 30s reset
+); // defaults: 5 failures, 30s reset — configurable via HORIZON_CIRCUIT_BREAKER_THRESHOLD / HORIZON_CIRCUIT_BREAKER_RESET_TIMEOUT_MS
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -839,62 +853,85 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       return sendError(res, 400, "Invalid wallet address");
     }
 
-    const challengeRow = await prisma.authChallenge.findUnique({
-      where: { walletAddress },
-    });
-    if (!challengeRow) {
-      return sendError(res, 400, "No challenge found for this wallet");
-    }
-
-    // Check if challenge expired
-    if (challengeRow.expiresAt < new Date()) {
-      await prisma.authChallenge.delete({ where: { walletAddress } });
-      return sendError(res, 400, "Challenge expired");
-    }
-
-    // Verify the signature
-    const isValid = verifySignature(
-      walletAddress,
-      challengeRow.challenge,
-      signature,
-    );
-    if (!isValid) {
-      return sendError(res, 401, "Invalid signature");
-    }
-
-    // Clear the used challenge
-    await prisma.authChallenge.delete({ where: { walletAddress } });
-
-    // Create or get user
-    let user = await prisma.user.findFirst({
-      where: { email: walletAddress },
-    });
-
-    if (!user) {
-      user = await prisma.user.create({
-        data: { email: walletAddress },
+    try {
+      const challengeRow = await prisma.authChallenge.findUnique({
+        where: { walletAddress },
       });
+      if (!challengeRow) {
+        return sendError(res, 400, "No challenge found for this wallet");
+      }
+
+      // Check if challenge expired
+      if (challengeRow.expiresAt < new Date()) {
+        await prisma.authChallenge.delete({ where: { walletAddress } });
+        return sendError(res, 400, "Challenge expired");
+      }
+
+      // Verify the signature
+      const isValid = verifySignature(
+        walletAddress,
+        challengeRow.challenge,
+        signature,
+      );
+      if (!isValid) {
+        return sendError(res, 401, "Invalid signature");
+      }
+
+      // Clear the used challenge
+      await prisma.authChallenge.delete({ where: { walletAddress } });
+
+      // Create or get user
+      let user = await prisma.user.findFirst({
+        where: { email: walletAddress },
+      });
+
+      if (!user) {
+        user = await prisma.user.create({
+          data: { email: walletAddress },
+        });
+      }
+
+      // Sign JWT
+      const token = signJWT(walletAddress, user.id);
+
+      // Attach wallet address as Sentry user context for session breadcrumbs
+      if (process.env.SENTRY_DSN) {
+        Sentry.setUser({ id: user.id, username: walletAddress });
+      }
+
+      // #759: Set httpOnly cookie so the browser sends it automatically.
+      // The token is still returned in the JSON body for API / mobile consumers
+      // that cannot access httpOnly cookies.
+      res.cookie("auth_token", token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        maxAge: 60 * 60 * 1000, // 1 hour — matches JWT_EXPIRY
+      });
+
+      res.json({ token, walletAddress, userId: user.id });
+    } catch (error) {
+      // #974: two concurrent /auth/verify calls for the same wallet can both
+      // read the same challenge row before either deletes it — the loser's
+      // delete throws P2025, or its user.create() throws P2002 on the email
+      // unique constraint. Both mean the other request already completed
+      // the verification, so the client can just retry.
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error.code === "P2025" || error.code === "P2002")
+      ) {
+        return sendError(
+          res,
+          409,
+          "Verification already in progress for this wallet, please retry",
+          "VERIFY_RACE",
+        );
+      }
+      req.log.error({ err: error }, "Error verifying auth challenge");
+      return sendError(res, 500, "Internal server error");
     }
-
-    // Sign JWT
-    const token = signJWT(walletAddress, user.id);
-
-    // Attach wallet address as Sentry user context for session breadcrumbs
-    if (process.env.SENTRY_DSN) {
-      Sentry.setUser({ id: user.id, username: walletAddress });
-    }
-
-    // #759: Set httpOnly cookie so the browser sends it automatically.
-    // The token is still returned in the JSON body for API / mobile consumers
-    // that cannot access httpOnly cookies.
-    res.cookie("auth_token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      maxAge: 60 * 60 * 1000, // 1 hour — matches JWT_EXPIRY
-    });
-
-    res.json({ token, walletAddress, userId: user.id });
   });
 
   /**
@@ -1051,7 +1088,19 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         const profiles = await prisma.profile.findMany({
           where,
           take: 1000,
-          include: {
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            bio: true,
+            avatarUrl: true,
+            websiteUrl: true,
+            twitterHandle: true,
+            githubHandle: true,
+            walletAddress: true,
+            viewCount: true,
+            createdAt: true,
+            updatedAt: true,
             acceptedAssets: true,
             supportTransactions: {
               where: { status: "SUCCESS" },
@@ -1127,7 +1176,21 @@ All errors return JSON with an \`error\` field and optional \`code\`:
           take: limit,
           skip: offset,
           orderBy,
-          include: { acceptedAssets: true },
+          select: {
+            id: true,
+            username: true,
+            displayName: true,
+            bio: true,
+            avatarUrl: true,
+            websiteUrl: true,
+            twitterHandle: true,
+            githubHandle: true,
+            walletAddress: true,
+            viewCount: true,
+            createdAt: true,
+            updatedAt: true,
+            acceptedAssets: true,
+          },
         }),
         prisma.profile.count({ where: combinedWhere }),
       ]);
@@ -1417,7 +1480,20 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     try {
       const profile = await prisma.profile.findUnique({
         where: { username: req.params.username as string },
-        include: {
+        select: {
+          id: true,
+          username: true,
+          displayName: true,
+          bio: true,
+          avatarUrl: true,
+          websiteUrl: true,
+          twitterHandle: true,
+          githubHandle: true,
+          walletAddress: true,
+          ownerId: true,
+          viewCount: true,
+          createdAt: true,
+          updatedAt: true,
           acceptedAssets: true,
         },
       });
@@ -1439,11 +1515,10 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         });
       }
 
-      const responseBody: Record<string, unknown> = { ...profile };
+      const { ownerId: _, ...publicProfile } = profile;
+      const responseBody: Record<string, unknown> = { ...publicProfile };
       if (req.auth) {
-        responseBody.isOwner = Boolean(
-          isProfileOwner(req.auth, profile),
-        );
+        responseBody.isOwner = isOwner;
       }
 
       res.json(responseBody);
@@ -1800,7 +1875,6 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     bio: z.string().max(280).optional(),
     avatarUrl: z.string().url().optional().nullable(),
     email: z.string().email().optional().nullable(),
-    notifyOnSupport: z.boolean().optional(),
     websiteUrl: z.string().url().startsWith("https://").optional().nullable(),
     twitterHandle: z
       .string()
@@ -2096,6 +2170,21 @@ All errors return JSON with an \`error\` field and optional \`code\`:
           await import("./services/profile-importer.js");
         ghData = mapGitHubToNovaSupport(await fetchGitHubProfile(githubUsername, githubToken));
 
+        // GitHub-sourced fields never pass through req.body, so the global
+        // sanitizeBody middleware never runs on them — sanitize explicitly here
+        // using the same helper to avoid a stored-XSS bypass.
+        ghData.displayName = sanitizeString("displayName", ghData.displayName).result;
+        ghData.bio = sanitizeString("bio", ghData.bio).result;
+        if (ghData.websiteUrl) {
+          ghData.websiteUrl = sanitizeString("websiteUrl", ghData.websiteUrl).result || null;
+        }
+        if (ghData.twitterHandle) {
+          ghData.twitterHandle = sanitizeString("twitterHandle", ghData.twitterHandle).result || null;
+        }
+        if (ghData.avatarUrl) {
+          ghData.avatarUrl = sanitizeString("avatarUrl", ghData.avatarUrl).result || null;
+        }
+
         const updated = await prisma.profile.update({
           where: { username },
           data: {
@@ -2304,7 +2393,8 @@ All errors return JSON with an \`error\` field and optional \`code\`:
             { message: "issuer is required for non-XLM assets" },
           ),
       )
-      .min(1),
+      .min(1)
+      .max(50),
   });
 
   /**
@@ -2377,6 +2467,20 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       }
 
       try {
+        // Deduplicate assets by (code, issuer) before insert
+        const seen = new Set<string>();
+        const duplicates: string[] = [];
+        for (const asset of parsed.data.assets) {
+          const key = `${asset.code}:${asset.issuer ?? ""}`;
+          if (seen.has(key)) {
+            duplicates.push(`${asset.code}${asset.issuer ? ` (issuer ${asset.issuer})` : ""}`);
+          }
+          seen.add(key);
+        }
+        if (duplicates.length > 0) {
+          return sendError(res, 422, `Duplicate assets: ${duplicates.join(", ")}`);
+        }
+
         await prisma.$transaction([
           prisma.acceptedAsset.deleteMany({ where: { profileId: profile.id } }),
           prisma.acceptedAsset.createMany({
@@ -2829,30 +2933,32 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       const profile = await resolveProfileOwner(req.params.username as string, req.auth, res);
       if (!profile) return;
 
-      const existingCount = await prisma.webhook.count({
-        where: { profileId: profile.id },
-      });
-      if (existingCount >= 10) {
+    try {
+      const result = await prisma.$transaction(
+        async (tx) => {
+          const existingCount = await tx.webhook.count({
+            where: { profileId: profile.id },
+          });
+          if (existingCount >= 10) {
+            throw new Error("MAX_WEBHOOKS_EXCEEDED");
+          }
+
+          const secret = randomBytes(32).toString("hex");
+          const secretHashValue = createHash("sha256").update(secret).digest("hex");
+          const webhook = await tx.webhook.create({
+            data: { url: parsed.data.url, secretHash: secretHashValue, signingKey: secret, profileId: profile.id },
+          });
+          return { webhook, secret };
+        },
+        { isolationLevel: "Serializable" },
+      );
+
+      return res.status(201).json({ id: result.webhook.id, url: result.webhook.url, secret: result.secret });
+    } catch (err) {
+      if (err instanceof Error && err.message === "MAX_WEBHOOKS_EXCEEDED") {
         return sendError(res, 422, "Maximum 10 webhooks per profile");
       }
-
-      const secret = randomBytes(32).toString("hex");
-      const webhook = await prisma.webhook.create({
-        data: { url: parsed.data.url, secretHash: secret, profileId: profile.id },
-      });
-
-      return res.status(201).json({ id: webhook.id, url: webhook.url, secret });
-    } catch (error: any) {
-      // Handle serialization failures from Serializable transaction isolation
-      if (error?.code === "P2034") {
-        return res.status(409).json({
-          error: "Concurrent modification detected. Please try again.",
-          code: "SERIALIZATION_FAILURE",
-        });
-      }
-      // Log unexpected errors but don't crash the process
-      req.log.error({ err: error }, "Unexpected error creating webhook");
-      return sendError(res, 500, "Internal server error");
+      throw err;
     }
   });
 
@@ -3286,15 +3392,34 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         void invalidateProfileLeaderboardCache(supportRecord.profileId);
       } catch (error: any) {
         if (error?.code === "P2002") {
-          const existing = await prisma.supportTransaction.findUnique({
-            where: { txHash: parsed.data.txHash },
-            select: { txHash: true },
-          });
+          // Inspect meta.target to determine which unique constraint was
+          // actually violated. SupportTransaction has two independent unique
+          // constraints — txHash and recurringSupportExecutionId — and
+          // always looking up by txHash when the real conflict is on
+          // recurringSupportExecutionId would return nothing, causing the 409
+          // to report a txHash that was never stored.
+          const target: string[] = error?.meta?.target ?? [];
+          let existingTxHash: string | null = null;
+
+          if (target.includes("recurringSupportExecutionId") && parsed.data.recurringSupportExecutionId) {
+            const existing = await prisma.supportTransaction.findUnique({
+              where: { recurringSupportExecutionId: parsed.data.recurringSupportExecutionId },
+              select: { txHash: true },
+            });
+            existingTxHash = existing?.txHash ?? null;
+          } else {
+            // Default: conflict on txHash (or unknown target — fall back safely).
+            const existing = await prisma.supportTransaction.findUnique({
+              where: { txHash: parsed.data.txHash },
+              select: { txHash: true },
+            });
+            existingTxHash = existing?.txHash ?? parsed.data.txHash;
+          }
 
           return res.status(409).json({
             error: "Transaction already recorded",
             code: "DUPLICATE_TX",
-            existingTxHash: existing?.txHash ?? parsed.data.txHash,
+            existingTxHash,
           });
         }
         // Handle other database errors gracefully instead of crashing the process
@@ -3311,9 +3436,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
           });
 
           const notifyOnSupport =
-            recipientProfile?.notificationPreferences?.notifyOnSupport ??
-            recipientProfile?.notifyOnSupport ??
-            true;
+            recipientProfile?.notificationPreferences?.notifyOnSupport ?? true;
 
           // Only send email if profile has verified email (#417)
           if (
@@ -3387,7 +3510,14 @@ All errors return JSON with an \`error\` field and optional \`code\`:
             }
           }
 
-          await processPendingWebhookDeliveries();
+          // The DB-poll fallback is only for when BullMQ isn't available —
+          // when it is, running this unconditionally would let every
+          // support-transaction request independently claim and deliver up
+          // to 50 pending rows outside the worker's rate limiter, defeating
+          // the point of enqueueing above (#975).
+          if (!getIsRedisAvailable()) {
+            await processPendingWebhookDeliveries();
+          }
         } catch (err) {
           logger.error(
             { err, txHash: supportRecord.txHash },
@@ -3890,14 +4020,25 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     }
 
     try {
-      const result = await prisma.webhookDelivery.updateMany({
+      const failed = await prisma.webhookDelivery.findMany({
         where: { status: "failed" },
+        select: { id: true },
+      });
+
+      const result = await prisma.webhookDelivery.updateMany({
+        where: { id: { in: failed.map((d) => d.id) } },
         data: {
           status: "pending",
           attemptCount: 0,
           nextRetryAt: new Date(),
         },
       });
+
+      for (const delivery of failed) {
+        enqueueWebhookDelivery(delivery.id).catch((err) => {
+          req.log.warn({ deliveryId: delivery.id, err }, "Failed to enqueue requeued webhook");
+        });
+      }
 
       req.log.info({ count: result.count }, "requeued failed webhooks");
       return res.json({ count: result.count });
@@ -3953,7 +4094,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
   // ── Milestones ─────────────────────────────────────────────────────────
 
   const createMilestoneSchema = z.object({
-    title: z.string().min(1).max(100),
+    title: z.string().trim().min(1).max(100),
     description: z.string().max(500).optional().nullable(),
     targetAmount: z
       .string()
@@ -3968,6 +4109,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       const username = req.params.username as string;
       const profile = await prisma.profile.findUnique({
         where: { username },
+        include: { acceptedAssets: true },
       });
 
       if (!profile) {
@@ -3979,52 +4121,50 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         return sendError(res, 403, "Forbidden: You do not own this profile");
       }
 
-      const activeCount = await prisma.milestone.count({
-        where: { profileId: profile.id, status: { not: "reached" } },
-      });
-      if (activeCount >= 20) {
-        return sendError(res, 422, "Maximum 20 active milestones per profile");
-      }
-
       const parsed = createMilestoneSchema.safeParse(req.body);
       if (!parsed.success) {
         return sendError(res, 400, "Invalid request body");
       }
 
-      // Validate that the asset is in the profile's accepted assets
-      const profileWithAssets = await prisma.profile.findUnique({
-        where: { id: profile.id },
-        include: { acceptedAssets: true },
-      });
-
-      const assetCode = parsed.data.assetCode;
-      const assetIssuer = parsed.data.assetIssuer ?? null;
-
-      const isAccepted = profileWithAssets?.acceptedAssets.some(
-        (a) => a.code === assetCode && (a.issuer ?? null) === assetIssuer
-      );
-
-      if (!isAccepted) {
+      const { assetCode, assetIssuer } = parsed.data;
+      const acceptedCodes = profile.acceptedAssets.map((a: { code: string }) => a.code);
+      if (acceptedCodes.length > 0 && !isAcceptedAssetPair(profile.acceptedAssets, assetCode, assetIssuer ?? null)) {
         return sendError(
           res,
-          422,
-          `Asset ${assetCode}${assetIssuer ? `:${assetIssuer}` : ""} is not in your accepted assets list`
+          400,
+          `Asset '${assetCode}'${assetIssuer ? ` (issuer ${assetIssuer})` : ""} is not accepted by this profile. Accepted: ${acceptedCodes.join(", ")}`,
         );
       }
 
-      const milestone = await prisma.milestone.create({
-        data: {
-          title: parsed.data.title,
-          description: parsed.data.description,
-          targetAmount: parsed.data.targetAmount,
-          assetCode: parsed.data.assetCode,
-          assetIssuer: parsed.data.assetIssuer,
-          profileId: profile.id,
+      const milestone = await prisma.$transaction(
+        async (tx) => {
+          const activeCount = await tx.milestone.count({
+            where: { profileId: profile.id, status: { not: "reached" } },
+          });
+          if (activeCount >= 20) {
+            throw new Error("MAX_MILESTONES_EXCEEDED");
+          }
+
+          const created = await tx.milestone.create({
+            data: {
+              title: parsed.data.title,
+              description: parsed.data.description,
+              targetAmount: parsed.data.targetAmount,
+              assetCode: parsed.data.assetCode,
+              assetIssuer: parsed.data.assetIssuer ?? null,
+              profileId: profile.id,
+            },
+          });
+          return created;
         },
-      });
+        { isolationLevel: "Serializable" },
+      );
 
       res.status(201).json(milestone);
-    } catch {
+    } catch (err) {
+      if (err instanceof Error && err.message === "MAX_MILESTONES_EXCEEDED") {
+        return sendError(res, 422, "Maximum 20 active milestones per profile");
+      }
       return sendError(res, 500, "Internal server error");
     }
   });
@@ -4085,40 +4225,18 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         return sendError(res, 400, "Cannot change targetAmount of a reached milestone");
       }
 
-      // Validate asset changes against accepted assets
-      if (parsed.data.assetCode !== undefined || parsed.data.assetIssuer !== undefined) {
-        const profileWithAssets = await prisma.profile.findUnique({
-          where: { id: profile.id },
-          include: { acceptedAssets: true },
-        });
-
-        const assetCode = parsed.data.assetCode ?? milestone.assetCode;
-        const assetIssuer = (parsed.data.assetIssuer ?? milestone.assetIssuer) ?? null;
-
-        const isAccepted = profileWithAssets?.acceptedAssets.some(
-          (a) => a.code === assetCode && (a.issuer ?? null) === assetIssuer
-        );
-
-        if (!isAccepted) {
-          return sendError(
-            res,
-            422,
-            `Asset ${assetCode}${assetIssuer ? `:${assetIssuer}` : ""} is not in your accepted assets list`
-          );
-        }
-      }
-
-      const data: typeof parsed.data & { status?: string; currentAmount?: any } = { ...parsed.data };
-
-      // Reset currentAmount if asset is being changed
-      if (
+      // If the asset identity is changing, reset progress so amounts aren't
+      // silently misrepresented in the new currency.
+      const assetChanging =
         (parsed.data.assetCode !== undefined && parsed.data.assetCode !== milestone.assetCode) ||
-        (parsed.data.assetIssuer !== undefined && (parsed.data.assetIssuer ?? null) !== (milestone.assetIssuer ?? null))
-      ) {
-        data.currentAmount = 0;
-      }
+        (parsed.data.assetIssuer !== undefined && parsed.data.assetIssuer !== milestone.assetIssuer);
 
-      if (
+      const data: typeof parsed.data & { currentAmount?: number; status?: string } = { ...parsed.data };
+
+      if (assetChanging) {
+        data.currentAmount = 0;
+        data.status = "active";
+      } else if (
         parsed.data.targetAmount !== undefined &&
         Number(milestone.currentAmount) >= Number(parsed.data.targetAmount)
       ) {
@@ -4269,48 +4387,57 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       const limit = Math.min(parseInt(req.query.limit as string) || 10, 100);
       const offset = Math.max(parseInt(req.query.offset as string) || 0, 0);
 
-      const [transactions, totalCount] = await Promise.all([
+      const whereClause = { supporterAddress: address };
+
+      const [transactions, totalCount, assetAggregates, profileAggregates] = await Promise.all([
         prisma.supportTransaction.findMany({
-          where: { supporterAddress: address },
+          where: whereClause,
           include: { profile: { select: { username: true, displayName: true } } },
           orderBy: { createdAt: "desc" },
           take: limit,
           skip: offset,
         }),
         prisma.supportTransaction.count({
-          where: { supporterAddress: address },
+          where: whereClause,
+        }),
+        // Aggregate totals per asset across ALL matching transactions (not just this page)
+        prisma.supportTransaction.groupBy({
+          by: ["assetCode"],
+          where: whereClause,
+          _sum: { amount: true },
+        }),
+        // Count distinct profiles across ALL matching transactions
+        prisma.supportTransaction.groupBy({
+          by: ["profileId"],
+          where: whereClause,
+          _count: { id: true },
+          orderBy: { _count: { id: "desc" } },
         }),
       ]);
 
-      const profilesSupported = new Set(transactions.map((tx: any) => tx.profileId)).size;
-      const assetMap = new Map<string, number>();
-      for (const tx of transactions) {
-        const key = tx.assetCode as string;
-        assetMap.set(key, (assetMap.get(key) ?? 0) + parseFloat(tx.amount.toString()));
-      }
-      const totalByAsset = Array.from(assetMap.entries()).map(([assetCode, total]) => ({
-        assetCode,
-        total: total.toFixed(7),
+      const profilesSupported = profileAggregates.length;
+
+      const totalByAsset = assetAggregates.map((row: any) => ({
+        assetCode: row.assetCode as string,
+        total: (row._sum.amount ?? 0).toFixed(7),
       }));
 
-      const supportedProfiles = Array.from(
-        transactions
-          .reduce((profiles: Map<string, { username: string; displayName: string; totalTransactions: number }>, tx: any) => {
-            const existing = profiles.get(tx.profileId);
-            if (existing) {
-              existing.totalTransactions += 1;
-              return profiles;
-            }
+      // Fetch display names for all profiles that appear in the aggregate
+      const profileIds = profileAggregates.map((r: any) => r.profileId as string);
+      const profileRows = await prisma.profile.findMany({
+        where: { id: { in: profileIds } },
+        select: { id: true, username: true, displayName: true },
+      });
+      const profileById = new Map(profileRows.map((p: any) => [p.id, p]));
 
-            profiles.set(tx.profileId, {
-              username: tx.profile.username,
-              displayName: tx.profile.displayName,
-              totalTransactions: 1,
-            });
-            return profiles;
-          }, new Map())
-          .values(),
-      ).sort((a, b) => b.totalTransactions - a.totalTransactions);
+      const supportedProfiles = profileAggregates.map((row: any) => {
+        const p = profileById.get(row.profileId as string);
+        return {
+          username: p?.username ?? "",
+          displayName: p?.displayName ?? "",
+          totalTransactions: row._count.id as number,
+        };
+      });
 
       const history = transactions.map((tx: any) => ({
         id: tx.id,
@@ -4346,6 +4473,21 @@ All errors return JSON with an \`error\` field and optional \`code\`:
 
   // ── Recurring Support ───────────────────────────────────────────────────
 
+  // Checks that (assetCode, assetIssuer) matches one of the profile's
+  // accepted (code, issuer) pairs, not just the asset code in isolation.
+  // `issuer` is nullable (e.g. native XLM has no issuer), so null/undefined
+  // are treated as equivalent "no issuer".
+  function isAcceptedAssetPair(
+    acceptedAssets: { code: string; issuer: string | null }[],
+    assetCode: string,
+    assetIssuer: string | null | undefined,
+  ): boolean {
+    const normalizedIssuer = assetIssuer ?? null;
+    return acceptedAssets.some(
+      (a) => a.code === assetCode && (a.issuer ?? null) === normalizedIssuer,
+    );
+  }
+
   const recurringSchema = z.object({
     profileId:   z.string().min(1),
     amount:      z.string().regex(/^\d+(\.\d{1,7})?$/, "amount must be a positive decimal with up to 7 decimal places").refine(v => parseFloat(v) > 0, "amount must be greater than zero"),
@@ -4368,8 +4510,8 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     if (!profile) return sendError(res, 404, "Profile not found");
 
     const acceptedCodes = profile.acceptedAssets.map((a: { code: string }) => a.code);
-    if (acceptedCodes.length > 0 && !acceptedCodes.includes(assetCode)) {
-      return sendError(res, 400, `Asset '${assetCode}' is not accepted by this profile. Accepted: ${acceptedCodes.join(", ")}`);
+    if (acceptedCodes.length > 0 && !isAcceptedAssetPair(profile.acceptedAssets, assetCode, assetIssuer)) {
+      return sendError(res, 400, `Asset '${assetCode}'${assetIssuer ? ` (issuer ${assetIssuer})` : ""} is not accepted by this profile. Accepted: ${acceptedCodes.join(", ")}`);
     }
 
     const user = await prisma.user.findFirst({ where: { email: req.auth!.walletAddress } });
@@ -4478,6 +4620,25 @@ All errors return JSON with an \`error\` field and optional \`code\`:
     if (subscription.supporterId !== user.id) return sendError(res, 403, "Forbidden");
 
     const { status, frequency, amount, assetIssuer } = parsed.data;
+
+    if (assetIssuer !== undefined) {
+      const profile = await prisma.profile.findUnique({
+        where: { id: subscription.profileId },
+        include: { acceptedAssets: true },
+      });
+      if (!profile) return sendError(res, 404, "Profile not found");
+
+      if (
+        profile.acceptedAssets.length > 0 &&
+        !isAcceptedAssetPair(profile.acceptedAssets, subscription.assetCode, assetIssuer)
+      ) {
+        return sendError(
+          res,
+          400,
+          `Asset '${subscription.assetCode}'${assetIssuer ? ` (issuer ${assetIssuer})` : ""} is not accepted by this profile`,
+        );
+      }
+    }
 
     // Recalculate nextRunAt when frequency changes
     let nextRunAt: Date | undefined;
