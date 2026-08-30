@@ -2822,25 +2822,38 @@ All errors return JSON with an \`error\` field and optional \`code\`:
   }
 
   v1Router.post("/profiles/:username/webhooks", requireAuth, async (req, res) => {
-    const parsed = webhookCreateSchema.safeParse(req.body);
-    if (!parsed.success) return sendError(res, 400, "Invalid URL — must be a valid HTTPS URL");
+    try {
+      const parsed = webhookCreateSchema.safeParse(req.body);
+      if (!parsed.success) return sendError(res, 400, "Invalid URL — must be a valid HTTPS URL");
 
-    const profile = await resolveProfileOwner(req.params.username as string, req.auth, res);
-    if (!profile) return;
+      const profile = await resolveProfileOwner(req.params.username as string, req.auth, res);
+      if (!profile) return;
 
-    const existingCount = await prisma.webhook.count({
-      where: { profileId: profile.id },
-    });
-    if (existingCount >= 10) {
-      return sendError(res, 422, "Maximum 10 webhooks per profile");
+      const existingCount = await prisma.webhook.count({
+        where: { profileId: profile.id },
+      });
+      if (existingCount >= 10) {
+        return sendError(res, 422, "Maximum 10 webhooks per profile");
+      }
+
+      const secret = randomBytes(32).toString("hex");
+      const webhook = await prisma.webhook.create({
+        data: { url: parsed.data.url, secretHash: secret, profileId: profile.id },
+      });
+
+      return res.status(201).json({ id: webhook.id, url: webhook.url, secret });
+    } catch (error: any) {
+      // Handle serialization failures from Serializable transaction isolation
+      if (error?.code === "P2034") {
+        return res.status(409).json({
+          error: "Concurrent modification detected. Please try again.",
+          code: "SERIALIZATION_FAILURE",
+        });
+      }
+      // Log unexpected errors but don't crash the process
+      req.log.error({ err: error }, "Unexpected error creating webhook");
+      return sendError(res, 500, "Internal server error");
     }
-
-    const secret = randomBytes(32).toString("hex");
-    const webhook = await prisma.webhook.create({
-      data: { url: parsed.data.url, secretHash: secret, profileId: profile.id },
-    });
-
-    return res.status(201).json({ id: webhook.id, url: webhook.url, secret });
   });
 
   v1Router.get("/profiles/:username/webhooks", requireAuth, async (req, res) => {
@@ -3284,7 +3297,9 @@ All errors return JSON with an \`error\` field and optional \`code\`:
             existingTxHash: existing?.txHash ?? parsed.data.txHash,
           });
         }
-        throw error;
+        // Handle other database errors gracefully instead of crashing the process
+        req.log.error({ err: error, txHash: parsed.data.txHash }, "Database error recording support transaction");
+        return sendError(res, 500, "Internal server error");
       }
 
       // Notify creator (async, best-effort) — respects NotificationPreferences
@@ -3945,6 +3960,7 @@ All errors return JSON with an \`error\` field and optional \`code\`:
       .regex(/^\d+(\.\d{1,7})?$/, "Must be a positive decimal with up to 7 places")
       .refine((v) => parseFloat(v) > 0, "Must be greater than zero"),
     assetCode: z.string().default("XLM"),
+    assetIssuer: z.string().optional().nullable(),
   });
 
   v1Router.post("/profiles/:username/milestones", requireAuth, writeLimiter, async (req, res) => {
@@ -3975,12 +3991,34 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         return sendError(res, 400, "Invalid request body");
       }
 
+      // Validate that the asset is in the profile's accepted assets
+      const profileWithAssets = await prisma.profile.findUnique({
+        where: { id: profile.id },
+        include: { acceptedAssets: true },
+      });
+
+      const assetCode = parsed.data.assetCode;
+      const assetIssuer = parsed.data.assetIssuer ?? null;
+
+      const isAccepted = profileWithAssets?.acceptedAssets.some(
+        (a) => a.code === assetCode && (a.issuer ?? null) === assetIssuer
+      );
+
+      if (!isAccepted) {
+        return sendError(
+          res,
+          422,
+          `Asset ${assetCode}${assetIssuer ? `:${assetIssuer}` : ""} is not in your accepted assets list`
+        );
+      }
+
       const milestone = await prisma.milestone.create({
         data: {
           title: parsed.data.title,
           description: parsed.data.description,
           targetAmount: parsed.data.targetAmount,
           assetCode: parsed.data.assetCode,
+          assetIssuer: parsed.data.assetIssuer,
           profileId: profile.id,
         },
       });
@@ -4047,7 +4085,39 @@ All errors return JSON with an \`error\` field and optional \`code\`:
         return sendError(res, 400, "Cannot change targetAmount of a reached milestone");
       }
 
-      const data: typeof parsed.data & { status?: string } = { ...parsed.data };
+      // Validate asset changes against accepted assets
+      if (parsed.data.assetCode !== undefined || parsed.data.assetIssuer !== undefined) {
+        const profileWithAssets = await prisma.profile.findUnique({
+          where: { id: profile.id },
+          include: { acceptedAssets: true },
+        });
+
+        const assetCode = parsed.data.assetCode ?? milestone.assetCode;
+        const assetIssuer = (parsed.data.assetIssuer ?? milestone.assetIssuer) ?? null;
+
+        const isAccepted = profileWithAssets?.acceptedAssets.some(
+          (a) => a.code === assetCode && (a.issuer ?? null) === assetIssuer
+        );
+
+        if (!isAccepted) {
+          return sendError(
+            res,
+            422,
+            `Asset ${assetCode}${assetIssuer ? `:${assetIssuer}` : ""} is not in your accepted assets list`
+          );
+        }
+      }
+
+      const data: typeof parsed.data & { status?: string; currentAmount?: any } = { ...parsed.data };
+
+      // Reset currentAmount if asset is being changed
+      if (
+        (parsed.data.assetCode !== undefined && parsed.data.assetCode !== milestone.assetCode) ||
+        (parsed.data.assetIssuer !== undefined && (parsed.data.assetIssuer ?? null) !== (milestone.assetIssuer ?? null))
+      ) {
+        data.currentAmount = 0;
+      }
+
       if (
         parsed.data.targetAmount !== undefined &&
         Number(milestone.currentAmount) >= Number(parsed.data.targetAmount)
