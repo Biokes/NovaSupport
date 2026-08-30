@@ -15,7 +15,7 @@ export interface WebhookJobData {
   deliveryId: string;
   webhookId: string;
   url: string;
-  secretHash: string;
+  signingKey: string;
   payload: Record<string, unknown>;
 }
 
@@ -65,7 +65,7 @@ export async function enqueueWebhookDelivery(deliveryId: string): Promise<void> 
       deliveryId: delivery.id,
       webhookId: delivery.webhookId,
       url: delivery.webhook.url,
-      secretHash: delivery.webhook.secretHash,
+      signingKey: delivery.webhook.signingKey,
       payload,
     } satisfies WebhookJobData,
     {
@@ -83,7 +83,7 @@ export function createWebhookWorker(): Worker | null {
   worker = new Worker(
     QUEUE_NAME,
     async (job) => {
-      const { deliveryId, url, secretHash, payload } = job.data as WebhookJobData;
+      const { deliveryId, url, signingKey, payload } = job.data as WebhookJobData;
 
       // Atomically claim the row
       const claimed = await prisma.webhookDelivery.updateMany({
@@ -96,7 +96,7 @@ export function createWebhookWorker(): Worker | null {
         return;
       }
 
-      const result = await deliverWebhook(url, secretHash, payload);
+      const result = await deliverWebhook(url, signingKey, payload);
 
       if (result.status === "success") {
         await prisma.webhookDelivery.update({

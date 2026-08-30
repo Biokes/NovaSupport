@@ -39,7 +39,7 @@ export async function processPendingWebhookDeliveries(
     if (claimed.count === 0) continue;
 
     const payload = delivery.payload as Record<string, unknown>;
-    const result = await deliver(delivery.webhook.url, delivery.webhook.secretHash, payload);
+    const result = await deliver(delivery.webhook.url, delivery.webhook.signingKey, payload);
 
     if (result.status === "success") {
       await prismaClient.webhookDelivery.update({
