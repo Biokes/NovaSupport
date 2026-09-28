@@ -176,8 +176,9 @@ exports[`ProfileCard > renders bio 1`] = `
             </span>
             <span
               class="ml-2 text-xs"
+              title="GBBD47IF6LWK7P7MDMSCR4XFM6KJLGMGR5E2Q3ZXZQ4KQQYT5R3332W"
             >
-              GBBD47IF6LWK7P7MDMSCR4XFM6KJLGMGR5E2Q3ZXZQ4KQQYT5R3332W
+              GBBD…332W
             </span>
           </div>
         </div>
@@ -363,8 +364,9 @@ exports[`ProfileCard > renders display name and username 1`] = `
             </span>
             <span
               class="ml-2 text-xs"
+              title="GBBD47IF6LWK7P7MDMSCR4XFM6KJLGMGR5E2Q3ZXZQ4KQQYT5R3332W"
             >
-              GBBD47IF6LWK7P7MDMSCR4XFM6KJLGMGR5E2Q3ZXZQ4KQQYT5R3332W
+              GBBD…332W
             </span>
           </div>
         </div>

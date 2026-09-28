@@ -52,7 +52,9 @@ describe("SettingsPage auth gate", () => {
     render(<SettingsPage />);
 
     await waitFor(() => {
-      expect(mockApiFetch).toHaveBeenCalledWith("http://localhost:4000/v1/auth/me");
+      expect(mockApiFetch).toHaveBeenCalledWith("http://localhost:4000/v1/auth/me", {
+        suppressAuthExpired: true,
+      });
     });
 
     await waitFor(() => {
