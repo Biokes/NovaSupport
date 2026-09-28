@@ -136,9 +136,10 @@ export default function RecurringPage() {
     }
   }
 
-  // Split into active and paused groups for clear visual separation
+  // Split into active, paused and cancelled groups for clear visual separation
   const activeSubscriptions = subscriptions.filter((s) => s.status === "active");
   const pausedSubscriptions = subscriptions.filter((s) => s.status === "paused");
+  const cancelledSubscriptions = subscriptions.filter((s) => s.status === "cancelled");
 
   function renderConfirmBar(sub: RecurringSupport) {
     if (!actionTarget || actionTarget.id !== sub.id) return null;
@@ -178,6 +179,8 @@ export default function RecurringPage() {
   }
 
   function renderActions(sub: RecurringSupport) {
+    // Cancelled subscriptions are history only; nothing left to act on.
+    if (sub.status === "cancelled") return null;
     if (actionTarget?.id === sub.id) return renderConfirmBar(sub);
 
     return (
@@ -235,8 +238,10 @@ export default function RecurringPage() {
               <StatusBadge status={sub.status} />
             </div>
             <p className="text-xs text-white/40">
-              {sub.amount} {sub.assetCode} · {sub.frequency} · next{" "}
-              {new Date(sub.nextRunAt).toLocaleDateString()}
+              {sub.amount} {sub.assetCode} · {sub.frequency}
+              {sub.status !== "cancelled" && (
+                <> · next {new Date(sub.nextRunAt).toLocaleDateString()}</>
+              )}
             </p>
           </div>
         </div>
@@ -246,7 +251,7 @@ export default function RecurringPage() {
     );
   }
 
-  const hasAny = activeSubscriptions.length + pausedSubscriptions.length > 0;
+  const hasAny = subscriptions.length > 0;
 
   return (
     <AppShell>
@@ -286,6 +291,17 @@ export default function RecurringPage() {
                 </h2>
                 <ul className="space-y-3">
                   {pausedSubscriptions.map(renderSubscriptionCard)}
+                </ul>
+              </section>
+            )}
+
+            {cancelledSubscriptions.length > 0 && (
+              <section>
+                <h2 className="text-xs font-semibold uppercase tracking-widest text-white/40 mb-3">
+                  Cancelled ({cancelledSubscriptions.length})
+                </h2>
+                <ul className="space-y-3">
+                  {cancelledSubscriptions.map(renderSubscriptionCard)}
                 </ul>
               </section>
             )}
