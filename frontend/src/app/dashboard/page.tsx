@@ -63,6 +63,12 @@ interface WebhookDelivery {
   createdAt: string;
 }
 
+// Surface the backend's `error` field when present, like the profile-edit page does.
+async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  return typeof json.error === "string" ? json.error : fallback;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const [username, setUsername] = useState<string | null>(null);
@@ -157,6 +163,12 @@ export default function DashboardPage() {
     e.preventDefault();
     if (!username || !formData.title.trim() || !formData.targetAmount) return;
 
+    const targetAmount = Number(formData.targetAmount);
+    if (!Number.isFinite(targetAmount) || targetAmount <= 0) {
+      setToast({ message: "Target amount must be a positive number.", type: "error" });
+      return;
+    }
+
     setSubmitting(true);
     try {
       const method = editingMilestone ? "PATCH" : "POST";
@@ -178,10 +190,10 @@ export default function DashboardPage() {
 
       if (!res.ok) {
         if (res.status === 429) {
-          alert(formatRateLimitedMessage(parseRateLimitInfo(res.headers)));
+          setToast({ message: formatRateLimitedMessage(parseRateLimitInfo(res.headers)), type: "error" });
           return;
         }
-        throw new Error("Failed to save milestone");
+        throw new Error(await readErrorMessage(res, "Failed to save milestone"));
       }
 
       const newMilestone = await res.json();
@@ -196,7 +208,7 @@ export default function DashboardPage() {
       setShowMilestoneForm(false);
       setEditingMilestone(null);
     } catch (err: any) {
-      alert(err.message);
+      setToast({ message: err.message, type: "error" });
     } finally {
       setSubmitting(false);
     }
@@ -225,16 +237,16 @@ export default function DashboardPage() {
 
       if (!res.ok) {
         if (res.status === 429) {
-          alert(formatRateLimitedMessage(parseRateLimitInfo(res.headers)));
+          setToast({ message: formatRateLimitedMessage(parseRateLimitInfo(res.headers)), type: "error" });
           return;
         }
-        throw new Error("Failed to delete milestone");
+        throw new Error(await readErrorMessage(res, "Failed to delete milestone"));
       }
 
       setMilestones(milestones.filter((m) => m.id !== milestoneId));
       setDeleteConfirm(null);
     } catch (err: any) {
-      alert(err.message);
+      setToast({ message: err.message, type: "error" });
     }
   };
 
@@ -256,7 +268,7 @@ export default function DashboardPage() {
         body: JSON.stringify({ url: webhookUrl }),
       });
 
-      if (!res.ok) throw new Error("Failed to add webhook");
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Failed to add webhook"));
 
       const newWebhook = await res.json();
       setWebhooks([newWebhook, ...webhooks]);
@@ -264,7 +276,7 @@ export default function DashboardPage() {
       setWebhookUrl("");
       setShowWebhookForm(false);
     } catch (err: any) {
-      alert(err.message);
+      setToast({ message: err.message, type: "error" });
     } finally {
       setWebhookSubmitting(false);
     }
@@ -279,12 +291,12 @@ export default function DashboardPage() {
         { method: "DELETE" }
       );
 
-      if (!res.ok) throw new Error("Failed to delete webhook");
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Failed to delete webhook"));
 
       setWebhooks(webhooks.filter((w) => w.id !== webhookId));
       setWebhookDeleteConfirm(null);
     } catch (err: any) {
-      alert(err.message);
+      setToast({ message: err.message, type: "error" });
     }
   };
 
@@ -541,6 +553,7 @@ export default function DashboardPage() {
                     </label>
                     <input
                       type="number"
+                      min="0.01"
                       step="0.01"
                       value={formData.targetAmount}
                       onChange={(e) => setFormData({ ...formData, targetAmount: e.target.value })}
