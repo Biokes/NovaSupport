@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
 import { generateSuggestions } from "./username-validator.js";
 
 test("generated username suggestions stay within the 32-character limit", () => {
@@ -10,4 +10,16 @@ test("generated username suggestions stay within the 32-character limit", () => 
     suggestions.join(", "),
   );
   assert.match(suggestions[0], /^a+-\d{1,4}$/);
+});
+
+test("first username suggestion is length guarded even with the largest numeric suffix", () => {
+  const random = mock.method(Math, "random", () => 0.9999);
+
+  try {
+    const [firstSuggestion] = generateSuggestions("b".repeat(32));
+    assert.equal(firstSuggestion.length, 32);
+    assert.equal(firstSuggestion.endsWith("-9999"), true);
+  } finally {
+    random.mock.restore();
+  }
 });
